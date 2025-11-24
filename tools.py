@@ -1,8 +1,9 @@
 import json
-import subprocess
 import os
 import platform
+import shlex
 from datetime import datetime
+from secure_executor import execute_secure_command, analyze_command
 
 # Tool implementations
 def get_system_info() -> dict:
@@ -20,51 +21,90 @@ def list_files(path: str) -> str:
     try:
         # Resolve relative paths to absolute paths
         path = os.path.abspath(path)
-        result = subprocess.run(['ls', '-1', path], capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return f"Error: {str(e)}"
+        command = f"ls -la {shlex.quote(path)}"
+        result = execute_secure_command(command, timeout=10)
+
+        if result.success:
+            lines = result.stdout.strip().split('\n') if result.stdout else []
+            return json.dumps({"files": lines})
+        else:
+            return json.dumps({"error": result.error_message or 'Command failed'})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 def git_status(repo_path: str) -> str:
     try:
-        result = subprocess.run(['git', 'status'], cwd=repo_path, capture_output=True, text=True, check=True)
-        return json.dumps({"status": result.stdout})
-    except subprocess.CalledProcessError as e:
+        command = f"git -C {shlex.quote(repo_path)} status"
+        result = execute_secure_command(command, timeout=15)
+
+        if result.success:
+            return json.dumps({"status": result.stdout})
+        else:
+            return json.dumps({"error": result.error_message or "Command failed"})
+    except Exception as e:
         return json.dumps({"error": str(e)})
 
 def git_add(repo_path: str, file_path: str) -> str:
     try:
-        result = subprocess.run(['git', 'add', file_path], cwd=repo_path, capture_output=True, text=True, check=True)
-        return json.dumps({"status": "File(s) added to staging area"})
-    except subprocess.CalledProcessError as e:
+        command = f"git -C {shlex.quote(repo_path)} add {shlex.quote(file_path)}"
+        result = execute_secure_command(command, timeout=15)
+
+        if result.success:
+            return json.dumps({"status": "File(s) added to staging area"})
+        else:
+            return json.dumps({"error": result.error_message or "Command failed"})
+    except Exception as e:
         return json.dumps({"error": str(e)})
 
 def git_add_all(repo_path: str) -> str:
     try:
-        result = subprocess.run(['git', 'add', '.'], cwd=repo_path, capture_output=True, text=True, check=True)
-        return json.dumps({"status": "All files added to staging area"})
-    except subprocess.CalledProcessError as e:
+        command = f"git -C {shlex.quote(repo_path)} add ."
+        result = execute_secure_command(command, timeout=15)
+
+        if result.success:
+            return json.dumps({"status": "All files added to staging area"})
+        else:
+            return json.dumps({"error": result.error_message or "Command failed"})
+    except Exception as e:
         return json.dumps({"error": str(e)})
 
 def git_commit(repo_path: str, message: str) -> str:
     try:
-        result = subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, capture_output=True, text=True, check=True)
-        return json.dumps({"status": "Commit successful", "output": result.stdout.strip()})
-    except subprocess.CalledProcessError as e:
+        # Escape single quotes in message for shell safety
+        escaped_message = shlex.quote(message)
+        command = f"git -C {shlex.quote(repo_path)} commit -m {escaped_message}"
+        result = execute_secure_command(command, timeout=20)
+
+        if result.success:
+            return json.dumps({"status": "Commit successful", "output": result.stdout.strip()})
+        else:
+            return json.dumps({"error": result.error_message or "Command failed"})
+    except Exception as e:
         return json.dumps({"error": str(e)})
 
 def git_log(repo_path: str, limit: int = 5) -> str:
     try:
-        result = subprocess.run(['git', 'log', f'--oneline', f'-{limit}'], cwd=repo_path, capture_output=True, text=True, check=True)
-        return json.dumps({"log": result.stdout.strip().split('\n')})
-    except subprocess.CalledProcessError as e:
+        command = f"git -C {shlex.quote(repo_path)} log --oneline -{limit}"
+        result = execute_secure_command(command, timeout=15)
+
+        if result.success:
+            return json.dumps({"log": result.stdout.strip().split('\n')})
+        else:
+            return json.dumps({"error": result.error_message or "Command failed"})
+    except Exception as e:
         return json.dumps({"error": str(e)})
 
 def awk_process(pattern: str, file: str, fs: str = ',') -> str:
     try:
-        result = subprocess.run(['awk', f'-F{fs}', pattern, file], capture_output=True, text=True, check=True)
-        return json.dumps({"output": result.stdout.strip().split('\n')})
-    except subprocess.CalledProcessError as e:
+        # Escape inputs for shell safety
+        command = f"awk -F{shlex.quote(fs)} {shlex.quote(pattern)} {shlex.quote(file)}"
+        result = execute_secure_command(command, timeout=20)
+
+        if result.success:
+            return json.dumps({"output": result.stdout.strip().split('\n')})
+        else:
+            return json.dumps({"error": result.error_message or "Command failed"})
+    except Exception as e:
         return json.dumps({"error": str(e)})
 
 def read_file(file_path: str) -> str:
@@ -78,10 +118,21 @@ def read_file(file_path: str) -> str:
         return json.dumps({"error": str(e)})
 
 def write_file(file_path: str, content: str) -> str:
+    """Write the specified content to the specified file, overwriting any existing content"""
     try:
+        # Resolve relative paths to absolute paths based on current working directory
+        file_path = os.path.abspath(file_path)
         with open(file_path, 'w') as f:
             f.write(content)
-        return json.dumps({"status": "File written successfully"})
+        return json.dumps({"success": True, "message": f"Content written to {file_path}"})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+def analyze_shell_command(command: str) -> str:
+    """Analyze a shell command to understand its structure and safety before execution"""
+    try:
+        analysis = analyze_command(command)
+        return json.dumps(analysis)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -95,7 +146,8 @@ available_functions = {
     "awk_process": awk_process,
     "read_file": read_file,
     "write_file": write_file,
-    "get_cwd": get_cwd
+    "get_cwd": get_cwd,
+    "analyze_shell_command": analyze_shell_command
 }
 
 # Tool schemas
@@ -235,6 +287,20 @@ tools = [
                 "type": "object",
                 "properties": {},
                 "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_shell_command",
+            "description": "Analyze a shell command to understand its structure, safety assessment, and execution requirements before running it. Use this to check if a command is safe and what it will do.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The shell command to analyze"}
+                },
+                "required": ["command"]
             }
         }
     }
