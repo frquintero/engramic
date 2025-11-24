@@ -43,8 +43,7 @@ def code_agent_orchestrator():
             "git_status/git_add/git_add_all/git_commit/git_log (repo management), "
             "awk_process (text processing with customizable separators), read_file/write_file (file I/O), "
             "get_cwd (current directory), analyze_shell_command (parse a shell command to show executable/args/redirects and the policy decision without running it), "
-            "run_shell_pipeline (execute full shell pipelines in the workspace; params: pipeline [required], "
-            "max_output_chars, env, mode full|constrained; timeout is fixed unless overridden by mode). Use exact tool names and parameters. "
+            "run_shell_pipeline (execute full shell pipelines in the workspace; timeout fixed unless mode constrains). Use exact tool names and parameters. "
             f"System Context: {json.dumps(system_info)}"
         )
 
