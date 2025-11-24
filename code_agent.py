@@ -2,11 +2,15 @@ import json
 import os
 from groq import Groq
 from tools import get_system_info, available_functions, tools, tools_descriptions
+from workspace_executor import ensure_workspace
 
 
 
 # Code-Agent Orchestrator
 def code_agent_orchestrator():
+    # Ensure workspace exists at startup
+    ensure_workspace()
+
     # Get current system information
     system_info = get_system_info()
     print(f"System Info: {system_info}")

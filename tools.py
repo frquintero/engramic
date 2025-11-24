@@ -4,6 +4,7 @@ import platform
 import shlex
 from datetime import datetime
 from secure_executor import execute_secure_command, analyze_command
+from workspace_executor import run_shell_pipeline, ensure_workspace
 
 # Tool implementations
 def get_system_info() -> dict:
@@ -11,7 +12,8 @@ def get_system_info() -> dict:
         "os": platform.system(),
         "date_time": datetime.now().isoformat(),
         "path": os.environ.get('PATH', ''),
-        "pwd": os.getcwd()
+        "pwd": os.getcwd(),
+        "workspace": str(ensure_workspace())
     }
 
 def get_cwd() -> str:
@@ -142,6 +144,25 @@ def analyze_shell_command(command: str) -> str:
     except Exception as e:
         return json.dumps({"error": str(e)})
 
+
+def run_pipeline_tool(pipeline: str, cwd: str = None, timeout_secs: int = 30,
+                      max_output_chars: int = 65536, env: dict = None, mode: str = "full") -> str:
+    """
+    Run a shell pipeline inside the workspace. This is intentionally powerful; keep guardrails via mode and timeouts.
+    """
+    try:
+        result = run_shell_pipeline(
+            pipeline=pipeline,
+            cwd=cwd,
+            timeout_secs=timeout_secs,
+            max_output_chars=max_output_chars,
+            env=env,
+            mode=mode
+        )
+        return json.dumps(result.__dict__)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
 available_functions = {
     "list_files": list_files,
     "git_status": git_status,
@@ -153,7 +174,8 @@ available_functions = {
     "read_file": read_file,
     "write_file": write_file,
     "get_cwd": get_cwd,
-    "analyze_shell_command": analyze_shell_command
+    "analyze_shell_command": analyze_shell_command,
+    "run_shell_pipeline": run_pipeline_tool
 }
 
 # Tool schemas
@@ -281,7 +303,7 @@ tools = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "The absolute path to the file to write"},
+                    "file_path": {"type": "string", "description": "The path to the file to write (relative or absolute)"},
                     "content": {"type": "string", "description": "The content to write to the file"}
                 },
                 "required": ["file_path", "content"]
@@ -311,6 +333,25 @@ tools = [
                     "command": {"type": "string", "description": "The shell command to analyze"}
                 },
                 "required": ["command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_shell_pipeline",
+            "description": "Execute a full shell pipeline in the code_agent workspace. Supports pipes, redirects, and env overrides. Defaults to full-power mode inside the workspace with timeouts and output truncation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pipeline": {"type": "string", "description": "Complete shell pipeline string (e.g., \"ls -1 | head -n 5\")"},
+                    "cwd": {"type": "string", "description": "Working directory (relative to workspace or absolute). Defaults to workspace."},
+                    "timeout_secs": {"type": "integer", "description": "Overall timeout in seconds (default 30)"},
+                    "max_output_chars": {"type": "integer", "description": "Truncate stdout/stderr beyond this length (default 65536)"},
+                    "env": {"type": "object", "description": "Optional environment variable overrides", "additionalProperties": {"type": "string"}},
+                    "mode": {"type": "string", "description": "Execution mode: 'full' (default) or 'constrained' for minimal guardrails"}
+                },
+                "required": ["pipeline"]
             }
         }
     }
