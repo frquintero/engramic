@@ -17,12 +17,17 @@ def get_system_info() -> dict:
 def get_cwd() -> str:
     return json.dumps({"cwd": os.getcwd()})
 
-def list_files(path: str) -> str:
+def list_files(path: str, detailed: bool = False, show_hidden: bool = False) -> str:
     try:
         # Resolve relative paths to absolute paths
         path = os.path.abspath(path)
-        # Use separated flags to satisfy policy allowlist
-        command = f"ls -l -a {shlex.quote(path)}"
+        flags = ["-1"]
+        if detailed:
+            flags.append("-l")
+        if show_hidden:
+            flags.append("-a")
+
+        command = f"ls {' '.join(flags)} {shlex.quote(path)}"
         result = execute_secure_command(command, timeout=10)
 
         if result.success:
@@ -157,10 +162,14 @@ tools = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "List all files and directories in the specified path, including hidden files and detailed information like permissions, sizes, and timestamps. Use relative paths (e.g., '.') for the current directory, or absolute paths.",
+            "description": "List files/directories in the specified path. Defaults to a simple one-per-line listing. Set detailed=true for -l output and show_hidden=true to include dotfiles.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "The path to the directory to list (relative or absolute)"}},
+                "properties": {
+                    "path": {"type": "string", "description": "The path to the directory to list (relative or absolute)"},
+                    "detailed": {"type": "boolean", "description": "Include long (-l) details like permissions and sizes"},
+                    "show_hidden": {"type": "boolean", "description": "Include hidden files (-a)"}
+                },
                 "required": ["path"]
             }
         }
