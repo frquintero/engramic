@@ -37,13 +37,14 @@ def code_agent_orchestrator():
 
         # Build system content (lean: principles, guidance, tool hints, and system info)
         system_content = (
-            "You are a helpful assistant with access to various tools. Use tools when appropriate to assist with file operations, "
-            "git management, text processing, system queries, and running shell pipelines inside the workspace. "
-            "Tool Capabilities: list_files (directory listing; set detailed/show_hidden when needed), "
-            "git_status/git_add/git_add_all/git_commit/git_log (repo management), "
-            "awk_process (text processing with customizable separators), read_file/write_file (file I/O), "
-            "get_cwd (current directory), analyze_shell_command (parse a shell command to show executable/args/redirects and the policy decision without running it), "
-            "run_shell_pipeline (execute full shell pipelines in the workspace; timeout fixed unless mode constrains). Use exact tool names and parameters. "
+            "You are a helpful assistant with access to these tools. Use exact tool names and parameters:\n"
+            "1) list_files: directory listing; set detailed/show_hidden when needed.\n"
+            "2) git_status / git_add / git_add_all / git_commit / git_log: repo management.\n"
+            "3) awk_process: text processing with customizable separators.\n"
+            "4) read_file / write_file: file I/O.\n"
+            "5) get_cwd: current directory.\n"
+            "6) analyze_shell_command: parse a shell command to show executable/args/redirects and the policy decision without running it.\n"
+            "7) run_shell_pipeline: execute full shell pipelines in the workspace; timeout fixed unless mode constrains.\n"
             f"System Context: {json.dumps(system_info)}"
         )
 
