@@ -41,7 +41,7 @@ def _truncate(text: str, limit: int) -> Tuple[str, bool]:
 
 def run_shell_pipeline(
     pipeline: str,
-    timeout_secs: int = 30,
+    timeout_secs: Optional[int] = None,
     max_output_chars: int = 65536,
     env: Optional[Dict[str, str]] = None,
     mode: str = "full",
@@ -95,7 +95,7 @@ def run_shell_pipeline(
             env=env_vars,
             capture_output=True,
             text=True,
-            timeout=timeout_secs,
+            timeout=timeout_secs if timeout_secs else None,
         )
         duration_ms = (time.time() - start) * 1000.0
 
@@ -121,7 +121,7 @@ def run_shell_pipeline(
             truncated=False,
             duration_ms=duration_ms,
             cwd=str(exec_cwd),
-            error=f"Timed out after {timeout_secs}s",
+            error=f"Timed out after {timeout_secs}s" if timeout_secs else "Timed out",
         )
     except Exception as e:
         duration_ms = (time.time() - start) * 1000.0

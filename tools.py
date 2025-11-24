@@ -145,13 +145,12 @@ def analyze_shell_command(command: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-def run_pipeline_tool(pipeline: str, timeout_secs: int = 30,
+def run_pipeline_tool(pipeline: str,
                       max_output_chars: int = 65536, env: dict = None, mode: str = "full") -> str:
-    """Run a shell pipeline inside the workspace. Intentionally powerful; guard with mode and timeouts."""
+    """Run a shell pipeline inside the workspace. Intentionally powerful; guard with mode and output limits."""
     try:
         result = run_shell_pipeline(
             pipeline=pipeline,
-            timeout_secs=timeout_secs,
             max_output_chars=max_output_chars,
             env=env,
             mode=mode
@@ -342,7 +341,6 @@ tools = [
                 "type": "object",
                 "properties": {
                     "pipeline": {"type": "string", "description": "Complete shell pipeline string (e.g., \"ls -1 | head -n 5\")"},
-                    "timeout_secs": {"type": "integer", "description": "Overall timeout in seconds (default 30)"},
                     "max_output_chars": {"type": "integer", "description": "Truncate stdout/stderr beyond this length (default 65536)"},
                     "env": {"type": "object", "description": "Optional environment variable overrides", "additionalProperties": {"type": "string"}},
                     "mode": {"type": "string", "description": "Execution mode: 'full' (default) or 'constrained' for minimal guardrails"}
