@@ -41,7 +41,6 @@ def _truncate(text: str, limit: int) -> Tuple[str, bool]:
 
 def run_shell_pipeline(
     pipeline: str,
-    cwd: Optional[str] = None,
     timeout_secs: int = 30,
     max_output_chars: int = 65536,
     env: Optional[Dict[str, str]] = None,
@@ -55,8 +54,7 @@ def run_shell_pipeline(
       - constrained: reject a few obviously dangerous patterns
     """
     workspace = ensure_workspace()
-    exec_cwd = Path(cwd) if cwd else workspace
-    exec_cwd = exec_cwd if exec_cwd.is_absolute() else (workspace / exec_cwd)
+    exec_cwd = workspace
 
     # Basic sanity checks
     if not pipeline.strip():

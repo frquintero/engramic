@@ -145,7 +145,7 @@ def analyze_shell_command(command: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-def run_pipeline_tool(pipeline: str, cwd: str = None, timeout_secs: int = 30,
+def run_pipeline_tool(pipeline: str, timeout_secs: int = 30,
                       max_output_chars: int = 65536, env: dict = None, mode: str = "full") -> str:
     """
     Run a shell pipeline inside the workspace. This is intentionally powerful; keep guardrails via mode and timeouts.
@@ -153,7 +153,6 @@ def run_pipeline_tool(pipeline: str, cwd: str = None, timeout_secs: int = 30,
     try:
         result = run_shell_pipeline(
             pipeline=pipeline,
-            cwd=cwd,
             timeout_secs=timeout_secs,
             max_output_chars=max_output_chars,
             env=env,
@@ -345,7 +344,6 @@ tools = [
                 "type": "object",
                 "properties": {
                     "pipeline": {"type": "string", "description": "Complete shell pipeline string (e.g., \"ls -1 | head -n 5\")"},
-                    "cwd": {"type": "string", "description": "Working directory (relative to workspace or absolute). Defaults to workspace."},
                     "timeout_secs": {"type": "integer", "description": "Overall timeout in seconds (default 30)"},
                     "max_output_chars": {"type": "integer", "description": "Truncate stdout/stderr beyond this length (default 65536)"},
                     "env": {"type": "object", "description": "Optional environment variable overrides", "additionalProperties": {"type": "string"}},
