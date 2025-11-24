@@ -16,7 +16,7 @@ def git_status(repo_path: str) -> str:
     try:
         result = subprocess.run(['git', 'status'], cwd=repo_path, capture_output=True, text=True, check=True)
         return json.dumps({"status": result.stdout})
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         return json.dumps({"error": str(e)})
 
 def awk_process(pattern: str, file: str) -> str:
