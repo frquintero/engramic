@@ -147,9 +147,7 @@ def analyze_shell_command(command: str) -> str:
 
 def run_pipeline_tool(pipeline: str, timeout_secs: int = 30,
                       max_output_chars: int = 65536, env: dict = None, mode: str = "full") -> str:
-    """
-    Run a shell pipeline inside the workspace. This is intentionally powerful; keep guardrails via mode and timeouts.
-    """
+    """Run a shell pipeline inside the workspace. Intentionally powerful; guard with mode and timeouts."""
     try:
         result = run_shell_pipeline(
             pipeline=pipeline,
