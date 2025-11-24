@@ -5,8 +5,8 @@ from tools import get_system_info, available_functions, tools, tools_description
 
 
 
-# Interactive demo function
-def demo_multi_tool_agent():
+# Code-Agent Orchestrator
+def code_agent_orchestrator():
     # Get current system information
     system_info = get_system_info()
     print(f"System Info: {system_info}")
@@ -19,12 +19,12 @@ def demo_multi_tool_agent():
     client = Groq(api_key=api_key)
     model = 'openai/gpt-oss-120b'
 
-    print("=== Multi-Tool Demo ===")
+    print("=== Multi-Tool Code-Agent Demo ===")
     print("Available tools: list_files, git_status, git_add, git_add_all, git_commit, git_log, awk_process, read_file, write_file, get_cwd")
     print("Type 'quit' to exit.\n")
 
-    # Persistent conversation history for inter-query continuity
-    conversation_history = []  # List of (user_query, final_ai_response) tuples
+    # Inter-user context for continuity across cycles
+    inter_user_context = []  # List of (user_query, final_ai_response) tuples
 
     while True:
         user_query = input("Enter your query: ")
@@ -34,11 +34,11 @@ def demo_multi_tool_agent():
         # Build system content (lean: principles, guidance, tool hints, and system info)
         system_content = f"You are a helpful assistant with access to various tools. Use tools when appropriate to assist with file operations, git management, text processing, and system queries. Provide clear, accurate responses. Tool Capabilities: list_files (directory listing), git_status/git_add/git_add_all/git_commit/git_log (repo management), awk_process (text processing with customizable separators), read_file/write_file (file I/O), get_cwd (current directory). Use exact tool names and parameters. System Context: {json.dumps(system_info)}"
 
-        # Build user content with history
+        # Build user content with inter-user context
         history_summaries = ""
-        if conversation_history:
+        if inter_user_context:
             history_summaries = "Previous Interactions:\n" + "\n".join(
-                f"Query: '{q}'. Response: '{r}'." for q, r in conversation_history[-5:]
+                f"Query: '{q}'. Response: '{r}'." for q, r in inter_user_context[-5:]
             ) + "\n\n"
 
         user_content = f"{history_summaries}Current Query: {user_query}"
@@ -52,7 +52,7 @@ def demo_multi_tool_agent():
         iteration = 0
         final_ai_response = None
 
-        print(f"\n--- Processing query: '{user_query}' ---")
+        print(f"\n--- Processing cycle for user_query: '{user_query}' ---")
 
         while iteration < max_iterations:
             iteration += 1
@@ -108,14 +108,14 @@ def demo_multi_tool_agent():
             print("Max iterations reached.")
             final_ai_response = "Max iterations reached, no final response."
 
-        # Append to history if we have a final response
+        # Append to inter-user context if we have a final response
         if final_ai_response:
-            conversation_history.append((user_query, final_ai_response))
+            inter_user_context.append((user_query, final_ai_response))
             # Keep only last 5
-            if len(conversation_history) > 5:
-                conversation_history = conversation_history[-5:]
+            if len(inter_user_context) > 5:
+                inter_user_context = inter_user_context[-5:]
 
         print("\n" + "="*50)
 
 if __name__ == "__main__":
-    demo_multi_tool_agent()
+    code_agent_orchestrator()
