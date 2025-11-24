@@ -24,7 +24,7 @@ def code_agent_orchestrator():
     model = 'openai/gpt-oss-120b'
 
     print("=== Multi-Tool Code-Agent Demo ===")
-    print("Available tools: list_files, git_status, git_add, git_add_all, git_commit, git_log, awk_process, read_file, write_file, get_cwd")
+    print("Available tools: list_files, git_status, git_add, git_add_all, git_commit, git_log, awk_process, read_file, write_file, get_cwd, run_shell_pipeline")
     print("Type 'quit' to exit.\n")
 
     # Inter-user context for continuity across cycles
@@ -36,7 +36,16 @@ def code_agent_orchestrator():
             break
 
         # Build system content (lean: principles, guidance, tool hints, and system info)
-        system_content = f"You are a helpful assistant with access to various tools. Use tools when appropriate to assist with file operations, git management, text processing, and system queries. Provide clear, accurate responses. Tool Capabilities: list_files (directory listing), git_status/git_add/git_add_all/git_commit/git_log (repo management), awk_process (text processing with customizable separators), read_file/write_file (file I/O), get_cwd (current directory). Use exact tool names and parameters. System Context: {json.dumps(system_info)}"
+        system_content = (
+            "You are a helpful assistant with access to various tools. Use tools when appropriate to assist with file operations, "
+            "git management, text processing, system queries, and running shell pipelines inside the workspace. "
+            "Tool Capabilities: list_files (directory listing; set detailed/show_hidden when needed), "
+            "git_status/git_add/git_add_all/git_commit/git_log (repo management), "
+            "awk_process (text processing with customizable separators), read_file/write_file (file I/O), "
+            "get_cwd (current directory), run_shell_pipeline (execute full shell pipelines; params: pipeline [required], cwd, timeout_secs, "
+            "max_output_chars, env, mode full|constrained). Use exact tool names and parameters. "
+            f"System Context: {json.dumps(system_info)}"
+        )
 
         # Build user content with inter-user context
         history_summaries = ""
