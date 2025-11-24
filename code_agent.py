@@ -44,7 +44,7 @@ def code_agent_orchestrator():
             "4) read_file / write_file: file I/O.\n"
             "5) get_cwd: current directory.\n"
             "6) analyze_shell_command: parse a shell command to show executable/args/redirects and the policy decision without running it.\n"
-            "7) run_shell_pipeline: execute full shell pipelines in the workspace; timeout fixed unless mode constrains.\n"
+            "7) run_shell_pipeline: execute full shell pipelines in the workspace.\n"
             f"System Context: {json.dumps(system_info)}"
         )
 
