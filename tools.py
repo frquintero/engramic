@@ -16,8 +16,6 @@ def get_system_info() -> dict:
         "workspace": str(ensure_workspace())
     }
 
-def get_cwd() -> str:
-    return json.dumps({"cwd": os.getcwd()})
 
 def list_files(path: str, detailed: bool = False, show_hidden: bool = False) -> str:
     try:
@@ -169,7 +167,6 @@ available_functions = {
     "awk_process": awk_process,
     "read_file": read_file,
     "write_file": write_file,
-    "get_cwd": get_cwd,
     "analyze_shell_command": analyze_shell_command,
     "run_shell_pipeline": run_pipeline_tool
 }
@@ -303,18 +300,6 @@ tools = [
                     "content": {"type": "string", "description": "The content to write to the file"}
                 },
                 "required": ["file_path", "content"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_cwd",
-            "description": "Get the current working directory path. Useful to know the base directory for relative paths.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
             }
         }
     },

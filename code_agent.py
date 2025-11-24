@@ -24,7 +24,7 @@ def code_agent_orchestrator():
     model = 'openai/gpt-oss-120b'
 
     print("=== Multi-Tool Code-Agent Demo ===")
-    print("Available tools: list_files, git_status, git_add, git_add_all, git_commit, git_log, awk_process, read_file, write_file, get_cwd, analyze_shell_command, run_shell_pipeline")
+    print("Available tools: list_files, git_status, git_add, git_add_all, git_commit, git_log, awk_process, read_file, write_file, analyze_shell_command, run_shell_pipeline")
     print("Type 'quit' to exit.\n")
 
     # Inter-user context for continuity across cycles
@@ -42,9 +42,8 @@ def code_agent_orchestrator():
             "2) git_status / git_add / git_add_all / git_commit / git_log: repo management.\n"
             "3) awk_process: text processing with customizable separators.\n"
             "4) read_file / write_file: file I/O.\n"
-            "5) get_cwd: current directory.\n"
-            "6) analyze_shell_command: parse a shell command to show executable/args/redirects and the policy decision without running it.\n"
-            "7) run_shell_pipeline: execute full shell pipelines in the workspace.\n"
+            "5) analyze_shell_command: parse a shell command to show executable/args/redirects and the policy decision without running it.\n"
+            "6) run_shell_pipeline: execute full shell pipelines in the workspace.\n"
             f"System Context: {json.dumps(system_info)}"
         )
 
