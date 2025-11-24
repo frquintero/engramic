@@ -21,7 +21,8 @@ def list_files(path: str) -> str:
     try:
         # Resolve relative paths to absolute paths
         path = os.path.abspath(path)
-        command = f"ls -la {shlex.quote(path)}"
+        # Use separated flags to satisfy policy allowlist
+        command = f"ls -l -a {shlex.quote(path)}"
         result = execute_secure_command(command, timeout=10)
 
         if result.success:
