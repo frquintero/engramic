@@ -9,6 +9,8 @@ import shlex
 
 
 DEFAULT_WORKSPACE = Path(os.environ.get("CODE_AGENT_WORKSPACE", "code_agent_workspace"))
+DEFAULT_TIMEOUT_SECS = int(os.environ.get("CODE_AGENT_PIPELINE_TIMEOUT_SECS", "30"))
+DEFAULT_MAX_OUTPUT_CHARS = int(os.environ.get("CODE_AGENT_MAX_OUTPUT_CHARS", "65536"))
 
 
 @dataclass
@@ -61,9 +63,9 @@ def _truncate(text: str, limit: int) -> Tuple[str, bool]:
 def run_shell_pipeline(
     pipeline: str,
     timeout_secs: Optional[int] = None,
-    max_output_chars: int = 65536,
+    max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
     env: Optional[Dict[str, str]] = None,
-    mode: str = "full",
+    mode: str = "constrained",
 ) -> PipelineResult:
     """
     Execute a shell pipeline in the workspace context.
@@ -74,6 +76,8 @@ def run_shell_pipeline(
     """
     workspace = ensure_workspace()
     exec_cwd = workspace
+    if timeout_secs is None:
+        timeout_secs = DEFAULT_TIMEOUT_SECS
 
     # Basic sanity checks
     if not pipeline.strip():
@@ -90,7 +94,79 @@ def run_shell_pipeline(
 
     if mode == "constrained":
         lowered = pipeline.lower()
-        if "rm -rf /" in lowered or "chmod /" in lowered or "chown /" in lowered:
+        interactive_flags = {"-i", "--interactive", "--login", "--shell"}
+        interactive_commands = {
+            "bash",
+            "zsh",
+            "sh",
+            "fish",
+            "mysql",
+            "psql",
+            "sqlite3",
+            "redis-cli",
+            "mongo",
+            "mongosh",
+            "vim",
+            "nano",
+            "emacs",
+            "less",
+            "more",
+            "top",
+            "htop",
+            "screen",
+            "tmux",
+        }
+        try:
+            tokens = shlex.split(pipeline)
+        except ValueError as e:
+            return PipelineResult(
+                success=False,
+                returncode=-1,
+                stdout="",
+                stderr="",
+                truncated=False,
+                duration_ms=0.0,
+                cwd=str(exec_cwd),
+                error=f"Failed to parse pipeline: {e}",
+            )
+
+        # Reject obvious interactive or destructive patterns
+        for tok in tokens:
+            if tok in interactive_commands or tok in interactive_flags:
+                return PipelineResult(
+                    success=False,
+                    returncode=-1,
+                    stdout="",
+                    stderr="",
+                    truncated=False,
+                    duration_ms=0.0,
+                    cwd=str(exec_cwd),
+                    error="Pipeline rejected: interactive commands are not allowed in constrained mode",
+                )
+            if tok == "rm":
+                if any(flag in tokens for flag in ("-rf", "-fr", "-r", "-f")):
+                    return PipelineResult(
+                        success=False,
+                        returncode=-1,
+                        stdout="",
+                        stderr="",
+                        truncated=False,
+                        duration_ms=0.0,
+                        cwd=str(exec_cwd),
+                        error="Pipeline rejected: destructive rm usage blocked",
+                    )
+            if tok in {"chmod", "chown"}:
+                return PipelineResult(
+                    success=False,
+                    returncode=-1,
+                    stdout="",
+                    stderr="",
+                    truncated=False,
+                    duration_ms=0.0,
+                    cwd=str(exec_cwd),
+                    error="Pipeline rejected: permission-changing commands are not allowed",
+                )
+        if "rm -rf /" in lowered:
             return PipelineResult(
                 success=False,
                 returncode=-1,

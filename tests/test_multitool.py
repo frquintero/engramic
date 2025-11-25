@@ -1,8 +1,19 @@
 import json
 import subprocess
 import os
-from groq import Groq
 import pytest
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
+
+from workspace_executor import run_shell_pipeline, ensure_workspace
+from tools import run_pipeline_tool
 
 # Tool implementations (from the example)
 def list_files(path: str) -> str:
@@ -101,6 +112,8 @@ tools = [
 
 # Orchestration function with real Groq API calls
 def run_multi_tool_agent(user_query, max_iterations=5):
+    if Groq is None:
+        pytest.skip("groq-sdk not installed", allow_module_level=True)
     client = Groq(api_key=os.environ.get('GROQ_API_KEY'))
     model = 'openai/gpt-oss-120b'  # Or any available model
 
@@ -144,6 +157,7 @@ def run_multi_tool_agent(user_query, max_iterations=5):
 # Pytest tests
 class TestMultiTool:
     @pytest.mark.skipif(not os.environ.get('GROQ_API_KEY'), reason="GROQ_API_KEY not set")
+    @pytest.mark.skipif(Groq is None, reason="groq-sdk not installed")
     def test_list_files_success(self):
         result = list_files(".")
         data = json.loads(result)
@@ -152,6 +166,7 @@ class TestMultiTool:
         assert len(data["files"]) > 0  # Should list files in current dir
 
     @pytest.mark.skipif(not os.environ.get('GROQ_API_KEY'), reason="GROQ_API_KEY not set")
+    @pytest.mark.skipif(Groq is None, reason="groq-sdk not installed")
     def test_git_status_success(self):
         result = git_status(".")
         data = json.loads(result)
@@ -198,6 +213,35 @@ class TestMultiTool:
         result = write_file("/invalid/path/test.txt", "content")
         data = json.loads(result)
         assert "error" in data
+
+
+class TestRunShellPipeline:
+    def test_rejects_interactive(self):
+        ensure_workspace()
+        result = run_shell_pipeline("bash -i", timeout_secs=2)
+        assert result.success is False
+        assert "interactive" in (result.error or "").lower()
+
+    def test_rejects_destructive_rm(self):
+        ensure_workspace()
+        result = run_shell_pipeline("rm -rf tmpdir", timeout_secs=2)
+        assert result.success is False
+        assert "destructive" in (result.error or "").lower()
+
+    def test_executes_simple_command(self):
+        ensure_workspace()
+        result = run_shell_pipeline("echo 'ok'", timeout_secs=5)
+        assert result.success is True
+        assert "ok" in result.stdout
+
+
+class TestRunPipelineTool:
+    def test_pipeline_lines_join(self):
+        payload = run_pipeline_tool(pipeline_lines=["echo one", "echo two"])
+        data = json.loads(payload)
+        assert data["success"] is True
+        assert "one" in data["result"]["stdout"]
+        assert "two" in data["result"]["stdout"]
 
     @pytest.mark.skipif(not os.environ.get('GROQ_API_KEY'), reason="GROQ_API_KEY not set")
     def test_single_tool_list_files(self):
