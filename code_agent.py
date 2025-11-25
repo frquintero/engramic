@@ -24,7 +24,7 @@ def code_agent_orchestrator():
     model = 'openai/gpt-oss-120b'
 
     print("=== Multi-Tool Code-Agent Demo ===")
-    print("Available tools: list_files, awk_process, read_file, write_file, analyze_shell_command, run_shell_pipeline")
+    print("Available tools: list_files, read_file, write_file, run_shell_pipeline")
     print("Type 'quit' to exit.\n")
 
     # Inter-user context for continuity across cycles
@@ -37,12 +37,10 @@ def code_agent_orchestrator():
 
         # Build system content (lean: principles, guidance, tool hints, and system info)
         system_content = (
-            "You are a helpful assistant with access to these tools. Use exact tool names and parameters:\n"
-            "1) list_files: directory listing; set detailed/show_hidden when needed.\n"
-            "2) awk_process: text processing with customizable separators.\n"
-            "3) read_file / write_file: file I/O.\n"
-            "4) analyze_shell_command: parse any proposed shell command to show executable/args/redirects and the policy decision without running it.\n"
-            "5) run_shell_pipeline: execute full shell pipelines in the workspace.\n"
+            "You are a helpful assistant with access to these tools. Use exact tool names and parameters.\n"
+            "1) list_files: directory listing.\n"
+            "2) read_file / write_file: file I/O.\n"
+            "3) run_shell_pipeline: execute full shell pipelines in the workspace when manipulating data, doing calculations, etc.\n"
             f"System Context: {json.dumps(system_info)}"
         )
 

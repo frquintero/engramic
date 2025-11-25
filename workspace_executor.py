@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import shlex
+
 
 DEFAULT_WORKSPACE = Path(os.environ.get("CODE_AGENT_WORKSPACE", "code_agent_workspace"))
 
@@ -29,6 +31,23 @@ def ensure_workspace(base: Path = DEFAULT_WORKSPACE) -> Path:
     """
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+def _resolve_workspace_path(raw_path: str, base: Path = DEFAULT_WORKSPACE) -> Path:
+    """
+    Resolve a user-supplied path inside the workspace. Reject traversal or
+    absolute paths that escape the workspace.
+    """
+    workspace = ensure_workspace(base).resolve()
+    candidate = Path(raw_path)
+    resolved = (workspace / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+
+    try:
+        resolved.relative_to(workspace)
+    except ValueError:
+        raise ValueError("Path is outside the workspace")
+
+    return resolved
 
 
 def _truncate(text: str, limit: int) -> Tuple[str, bool]:
@@ -82,6 +101,38 @@ def run_shell_pipeline(
                 cwd=str(exec_cwd),
                 error="Pipeline rejected in constrained mode",
             )
+
+    # Validate that tokens referencing filesystem paths stay within workspace
+    try:
+        for token in shlex.split(pipeline):
+            # Skip obvious operators
+            if token in {"|", ">", ">>", "<", "<<", "2>", "2>>"}:
+                continue
+            # If token looks like a path (contains a slash or starts with dot), ensure it resolves inside the workspace
+            if "/" in token or token.startswith("."):
+                _resolve_workspace_path(token, base=workspace)
+    except ValueError as e:
+        return PipelineResult(
+            success=False,
+            returncode=-1,
+            stdout="",
+            stderr="",
+            truncated=False,
+            duration_ms=0.0,
+            cwd=str(exec_cwd),
+            error=str(e),
+        )
+    except Exception as e:
+        return PipelineResult(
+            success=False,
+            returncode=-1,
+            stdout="",
+            stderr="",
+            truncated=False,
+            duration_ms=0.0,
+            cwd=str(exec_cwd),
+            error=f"Failed to validate pipeline: {e}",
+        )
 
     env_vars = os.environ.copy()
     if env:

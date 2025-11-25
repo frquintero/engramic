@@ -7,9 +7,9 @@ import pytest
 # Tool implementations (from the example)
 def list_files(path: str) -> str:
     try:
-        result = subprocess.run(['ls', '-la', path], capture_output=True, text=True, check=True)
+        result = subprocess.run(['ls', '-1'], cwd=path, capture_output=True, text=True, check=True)
         return json.dumps({"files": result.stdout.strip().split('\n')})
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         return json.dumps({"error": str(e)})
 
 def git_status(repo_path: str) -> str:
@@ -17,13 +17,6 @@ def git_status(repo_path: str) -> str:
         result = subprocess.run(['git', 'status'], cwd=repo_path, capture_output=True, text=True, check=True)
         return json.dumps({"status": result.stdout})
     except Exception as e:
-        return json.dumps({"error": str(e)})
-
-def awk_process(pattern: str, file: str) -> str:
-    try:
-        result = subprocess.run(['awk', pattern, file], capture_output=True, text=True, check=True)
-        return json.dumps({"output": result.stdout.strip().split('\n')})
-    except subprocess.CalledProcessError as e:
         return json.dumps({"error": str(e)})
 
 def read_file(file_path: str) -> str:
@@ -45,7 +38,6 @@ def write_file(file_path: str, content: str) -> str:
 available_functions = {
     "list_files": list_files,
     "git_status": git_status,
-    "awk_process": awk_process,
     "read_file": read_file,
     "write_file": write_file
 }
@@ -56,11 +48,11 @@ tools = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "Lista archivos en un directorio",
+            "description": "Lista archivos en el directorio de trabajo actual (workspace root) con ls -1",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
-                "required": ["path"]
+                "properties": {},
+                "required": []
             }
         }
     },
@@ -73,21 +65,6 @@ tools = [
                 "type": "object",
                 "properties": {"repo_path": {"type": "string"}},
                 "required": ["repo_path"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "awk_process",
-            "description": "Use awk for text processing, pattern scanning, and data manipulation. Provide a pattern (e.g., '{print $1}') and a file path.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string", "description": "The awk pattern and action, e.g., '{print $1}'"},
-                    "file": {"type": "string", "description": "The file path to process"}
-                },
-                "required": ["pattern", "file"]
             }
         }
     },
@@ -128,7 +105,7 @@ def run_multi_tool_agent(user_query, max_iterations=5):
     model = 'openai/gpt-oss-120b'  # Or any available model
 
     messages = [
-        {"role": "system", "content": "You are a helpful assistant with tools for listing files, checking git status, processing text with awk, reading files, and writing files."},
+        {"role": "system", "content": "You are a helpful assistant with tools for listing files, checking git status, reading files, and writing files."},
         {"role": "user", "content": user_query}
     ]
 
@@ -188,21 +165,6 @@ class TestMultiTool:
 
     def test_git_status_error(self):
         result = git_status("/nonexistent")
-        data = json.loads(result)
-        assert "error" in data
-
-    def test_awk_success(self):
-        # Create a test file
-        with open("test_file.txt", "w") as f:
-            f.write("line1 col2\nline2 col2\n")
-        result = awk_process("{print $1}", "test_file.txt")
-        data = json.loads(result)
-        assert "output" in data
-        assert data["output"] == ["line1", "line2"]
-        os.remove("test_file.txt")
-
-    def test_awk_error(self):
-        result = awk_process("{print $1}", "/nonexistent")
         data = json.loads(result)
         assert "error" in data
 
