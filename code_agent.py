@@ -4,6 +4,14 @@ from groq import Groq
 from tools import get_system_info, available_functions, tools, tools_descriptions, build_response
 from workspace_executor import ensure_workspace
 
+# Load configuration
+try:
+    with open('config.json') as f:
+        config = json.load(f)
+    debug = config.get('debug', False)
+except FileNotFoundError:
+    debug = False
+
 
 
 # Code-Agent Orchestrator
@@ -84,7 +92,7 @@ def code_agent_orchestrator():
         print(f"\n--- Processing cycle for user_query: '{user_query}' ---")
 
         # Initial request
-        print("RAW PROMPT (initial):", json.dumps(messages, indent=2, default=_to_serializable))
+        if debug: print("RAW PROMPT (initial):", json.dumps(messages, indent=2, default=_to_serializable))
         response = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -96,24 +104,25 @@ def code_agent_orchestrator():
             raw_response = response.model_dump()
         except Exception:
             raw_response = str(response)
-        if isinstance(raw_response, str):
-            print(f"RAW RESPONSE (initial): {raw_response}")
-        else:
-            print("RAW RESPONSE (initial):", json.dumps(raw_response, indent=2, default=_to_serializable))
+        if debug:
+            if isinstance(raw_response, str):
+                print(f"RAW RESPONSE (initial): {raw_response}")
+            else:
+                print("RAW RESPONSE (initial):", json.dumps(raw_response, indent=2, default=_to_serializable))
 
         while response.choices[0].message.tool_calls and iteration < max_iterations:
             iteration += 1
             messages.append(response.choices[0].message)
 
-            print(f"\nIteration {iteration}:")
+            if debug: print(f"\nIteration {iteration}:")
 
             response_message = response.choices[0].message
-            print(f"AI Response: {response_message.content or 'No direct response'}")
+            if debug: print(f"AI Response: {response_message.content or 'No direct response'}")
 
             if response_message.tool_calls:
-                print(f"AI decided to call {len(response_message.tool_calls)} tool(s):")
+                if debug: print(f"AI decided to call {len(response_message.tool_calls)} tool(s):")
                 for i, tool_call in enumerate(response_message.tool_calls, 1):
-                    print(f"  {i}. {tool_call.function.name} with args: {tool_call.function.arguments}")
+                    if debug: print(f"  {i}. {tool_call.function.name} with args: {tool_call.function.arguments}")
 
             for tool_call in response_message.tool_calls:
                 function_name = tool_call.function.name
@@ -132,7 +141,7 @@ def code_agent_orchestrator():
                         "name": function_name,
                         "content": error_payload,
                     })
-                    print(f"Argument parse error for {function_name}: {e}")
+                    if debug: print(f"Argument parse error for {function_name}: {e}")
                     continue
 
                 if function_name not in available_functions:
@@ -148,7 +157,7 @@ def code_agent_orchestrator():
                         "name": function_name,
                         "content": error_payload,
                     })
-                    print(f"Unknown tool requested: {function_name}")
+                    if debug: print(f"Unknown tool requested: {function_name}")
                     continue
 
                 if not isinstance(function_args, dict):
@@ -164,7 +173,7 @@ def code_agent_orchestrator():
                         "name": function_name,
                         "content": error_payload,
                     })
-                    print(f"Validation error for {function_name}: args not an object")
+                    if debug: print(f"Validation error for {function_name}: args not an object")
                     continue
 
                 missing = [k for k in required_args.get(function_name, []) if k not in function_args]
@@ -185,7 +194,7 @@ def code_agent_orchestrator():
                             "name": function_name,
                             "content": error_payload,
                         })
-                        print(f"Validation error for {function_name}: missing pipeline or pipeline_lines")
+                        if debug: print(f"Validation error for {function_name}: missing pipeline or pipeline_lines")
                         continue
                 elif missing:
                     error_payload = build_response(
@@ -201,14 +210,14 @@ def code_agent_orchestrator():
                         "name": function_name,
                         "content": error_payload,
                     })
-                    print(f"Validation error for {function_name}: missing {missing}")
+                    if debug: print(f"Validation error for {function_name}: missing {missing}")
                     continue
 
-                print(f"\nExecuting {function_name}({function_args})...")
+                if debug: print(f"\nExecuting {function_name}({function_args})...")
                 try:
                     function_to_call = available_functions[function_name]
                     function_response = function_to_call(**function_args)
-                    print(f"Tool Result: {function_response}")
+                    if debug: print(f"Tool Result: {function_response}")
                 except Exception as e:
                     function_response = build_response(
                         tool=function_name,
@@ -216,7 +225,7 @@ def code_agent_orchestrator():
                         error_type="execution_error",
                         message=str(e),
                     )
-                    print(f"Execution error for {function_name}: {e}")
+                    if debug: print(f"Execution error for {function_name}: {e}")
 
                 tool_msg = {
                     "role": "tool",
@@ -227,7 +236,7 @@ def code_agent_orchestrator():
                 messages.append(tool_msg)
 
             # Next turn with tool results
-            print("RAW PROMPT (iteration):", json.dumps([msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in messages], indent=2, default=_to_serializable))
+            if debug: print("RAW PROMPT (iteration):", json.dumps([msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in messages], indent=2, default=_to_serializable))
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
@@ -239,13 +248,14 @@ def code_agent_orchestrator():
                 raw_response = response.model_dump()
             except Exception:
                 raw_response = str(response)
-            if isinstance(raw_response, str):
-                print(f"RAW RESPONSE (iteration): {raw_response}")
-            else:
-                print("RAW RESPONSE (iteration):", json.dumps(raw_response, indent=2, default=_to_serializable))
+            if debug:
+                if isinstance(raw_response, str):
+                    print(f"RAW RESPONSE (iteration): {raw_response}")
+                else:
+                    print("RAW RESPONSE (iteration):", json.dumps(raw_response, indent=2, default=_to_serializable))
 
         if iteration >= max_iterations:
-            print("Max iterations reached.")
+            if debug: print("Max iterations reached.")
             final_ai_response = "Max iterations reached, no final response."
         else:
             final_ai_response = response.choices[0].message.content or "No final response"
@@ -259,7 +269,7 @@ def code_agent_orchestrator():
             if len(inter_user_context) > 5:
                 inter_user_context = inter_user_context[-5:]
 
-        print("\n" + "="*50)
+        if debug: print("\n" + "="*50)
 
 if __name__ == "__main__":
     code_agent_orchestrator()
