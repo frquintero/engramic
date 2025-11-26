@@ -1,3 +1,4 @@
 groq
 python-dotenv
 yfinance
+requests

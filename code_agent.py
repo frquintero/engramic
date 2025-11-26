@@ -55,9 +55,8 @@ def code_agent_orchestrator():
         # Build system content (lean: principles, guidance, tool hints, and system info)
         tools_list = "\n".join(f"{i+1}) {name}: {desc}" for i, (name, desc) in enumerate(tools_descriptions.items()))
         system_content = (
-            "You are a helpful assistant with access to these tools. Use exact tool names and parameters.\n"
-            "Workspace rules: stay within the workspace (code_agent_workspace). Avoid interactive commands/shells; avoid destructive operations (rm -rf, chmod/chown)\n"
-            "Return concise, structured results; if a tool fails, rely on the tool's JSON error payload rather than retrying the same invalid call.\n"
+            "You are an agentic, helpful and friendly ai assistant.\n"
+            "If you need to use a tool, make sure to call it with the correct parameters.\n"
             f"Tools:\n{tools_list}\n"
             f"System Context: {json.dumps(system_info)}"
         )
