@@ -41,7 +41,7 @@ def code_agent_orchestrator():
     model = 'openai/gpt-oss-120b'
 
     print("=== Multi-Tool Code-Agent Demo ===")
-    print("Available tools: list_files, read_file, write_file, run_shell_pipeline")
+    print(f"Available tools: {', '.join(tools_descriptions.keys())}")
     print("Type 'quit' to exit.\n")
 
     # Inter-user context for continuity across cycles
@@ -53,14 +53,12 @@ def code_agent_orchestrator():
             break
 
         # Build system content (lean: principles, guidance, tool hints, and system info)
+        tools_list = "\n".join(f"{i+1}) {name}: {desc}" for i, (name, desc) in enumerate(tools_descriptions.items()))
         system_content = (
             "You are a helpful assistant with access to these tools. Use exact tool names and parameters.\n"
             "Workspace rules: stay within the workspace (code_agent_workspace). Avoid interactive commands/shells; avoid destructive operations (rm -rf, chmod/chown)\n"
             "Return concise, structured results; if a tool fails, rely on the tool's JSON error payload rather than retrying the same invalid call.\n"
-            "Tools:\n"
-            "1) list_files: directory listing of workspace root.\n"
-            "2) read_file / write_file: workspace file I/O.\n"
-            "3) run_shell_pipeline: non-interactive shell pipeline in workspace.\n"
+            f"Tools:\n{tools_list}\n"
             f"System Context: {json.dumps(system_info)}"
         )
 
@@ -83,6 +81,7 @@ def code_agent_orchestrator():
             "read_file": ["file_path"],
             "write_file": ["file_path", "content"],
             "run_shell_pipeline": [],
+            "get_system_info_inxi": [],
         }
 
         max_iterations = 10

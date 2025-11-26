@@ -165,11 +165,62 @@ def run_pipeline_tool(pipeline: str = "", pipeline_lines: Optional[List[str]] = 
         return build_response(tool="run_shell_pipeline", success=False, error_type="execution_error", message=str(e))
 
 
+def get_system_info_inxi() -> str:
+    """Get full system information using inxi -F. Checks if inxi is installed first."""
+    try:
+        # Check if inxi is installed
+        check_result = run_shell_pipeline(
+            pipeline="which inxi",
+            timeout_secs=5,
+            max_output_chars=1024,
+            mode="unconstrained",  # Allow system-wide check
+        )
+        if not check_result.success or not check_result.stdout.strip():
+            return build_response(
+                tool="get_system_info_inxi",
+                success=False,
+                error_type="tool_not_available",
+                message="inxi is not installed on this system. Use another tool for system information.",
+            )
+
+        # Run inxi -F for full system information
+        command = "inxi -F"
+
+        # Run the command
+        result = run_shell_pipeline(
+            pipeline=command,
+            timeout_secs=DEFAULT_PIPELINE_TIMEOUT,
+            max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
+            mode="unconstrained",  # Allow access to system info
+        )
+        if result.success:
+            return build_response(
+                tool="get_system_info_inxi",
+                success=True,
+                result={"system_info": result.stdout},
+                truncated=result.truncated,
+                duration_ms=result.duration_ms,
+            )
+        return build_response(
+            tool="get_system_info_inxi",
+            success=False,
+            error_type="execution_error",
+            message=result.error or result.stderr or "Failed to retrieve system info",
+            stderr=result.stderr,
+            truncated=result.truncated,
+            timeout=bool(result.error and "Timed out" in result.error),
+            duration_ms=result.duration_ms,
+        )
+    except Exception as e:
+        return build_response(tool="get_system_info_inxi", success=False, error_type="execution_error", message=str(e))
+
+
 available_functions = {
     "list_files": list_files,
     "read_file": read_file,
     "write_file": write_file,
     "run_shell_pipeline": run_pipeline_tool,
+    "get_system_info_inxi": get_system_info_inxi,
 }
 
 tools = [
@@ -218,18 +269,25 @@ tools = [
         "type": "function",
         "function": {
             "name": "run_shell_pipeline",
-            "description": "Execute a non-interactive shell pipeline in the workspace shell (cwd: code_agent_workspace). Constrained mode: blocks interactive/destructive commands, enforces timeout/output caps. Returns JSON envelope with stdout/stderr or error.\n"
-            "Usage:\n"
-            "1. Single commands: Use 'pipeline' for simple operations (e.g., 'pwd', 'date', 'cal', 'python -c \"print(1+1)\"', 'awk \"{print $1}\" file.txt'). Choose when the task is standalone and doesn't need piping.\n"
-            "2. Pipeline commands: Use 'pipeline' for chained operations with | (e.g., 'cat file.txt | grep pattern | sort -n'). Choose for efficient data streaming, filtering, and transformation.\n"
-            "3. Multiline scripts: Use 'pipeline_lines' as an array for complex logic (e.g., [\"for i in 1 2 3; do echo $i; done\", \"if [ -f file.txt ]; then cat file.txt; fi\"]). Choose for loops, conditionals, or multi-step scripts.\n"
-            "Provide either a single-line, JSON-safe pipeline string or pipeline_lines as an array of command lines joined with newlines.",
+            "description": "Execute non-interactive shell commands or pipelines in the workspace (constrained mode blocks destructive operations). Use 'pipeline' for single commands/pipes, 'pipeline_lines' for multiline scripts. Returns JSON with stdout/stderr or error.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "pipeline": {"type": "string", "description": "Complete shell pipeline string (e.g., \"ls -1 | head -n 5\", \"cat file.txt | sed 's/foo/bar/' | awk '{print $1}'\", or \"python -c \\\"print('hi')\\\" | sed 's/hi/hello/' > out.txt\"). Must be JSON-safe (no raw newlines)."},
-                    "pipeline_lines": {"type": "array", "description": "Array of command lines to join with newlines for execution (use for multiline scripts instead of heredocs).", "items": {"type": "string"}}
+                    "pipeline": {"type": "string", "description": "Shell command or pipeline string (e.g., 'ls -1 | head -n 5'). Must be JSON-safe."},
+                    "pipeline_lines": {"type": "array", "description": "Array of command lines for multiline scripts.", "items": {"type": "string"}}
                 },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_system_info_inxi",
+            "description": "Retrieve full system information using 'inxi -F'. Returns JSON envelope with system info or error if inxi is not installed.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
                 "required": [],
             },
         },
