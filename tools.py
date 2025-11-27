@@ -53,8 +53,8 @@ def build_response(
 def get_system_info() -> dict:
     workspace = str(ensure_workspace())
     return {
-        "os": platform.system(),
-        "date_time": datetime.now().isoformat(),
+        "os": platform.platform(),
+        "system_local_time": datetime.now().isoformat() + " (not UTC)",
         "workspace": workspace,
     }
 
@@ -459,7 +459,7 @@ tools = [
         "type": "function",
         "function": {
             "name": "run_shell_pipeline",
-            "description": "Execute non-interactive shell commands or pipelines in the workspace (awk, sed, bc, sort, grep, 'python -c', etc.) Use 'pipeline' for single commands/pipes, 'pipeline_lines' for multiline scripts.",
+            "description": "Execute non-interactive shell commands or pipelines in the workspace (awk, sed, bc, sort, grep, 'python -c', etc.) Use 'pipeline' for single commands/pipes, 'pipeline_lines' for multiline scripts. Arguments must be valid JSON without comments or invalid syntax.",
             "parameters": {
                 "type": "object",
                 "properties": {
