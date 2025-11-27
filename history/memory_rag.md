@@ -1,89 +1,68 @@
-# Dynamic Memory Selection for the Orchestrator (RAG)
+# Hybrid Entity-Centric Memory (Consolidated Cards + Raw Turns)
 
 ## Objective
-Give the orchestrator an efficient, semantics-aware memory layer that retrieves only the most relevant prior interactions and injects them into the model prompt without exceeding context limits.
+Maintain compact, high-recall long-term memory via consolidated, entity-grouped cards, while keeping a short window of raw turns for immediate context.
 
 ## Core approach
-- Encode the current user input (and optional system hints) into embeddings.
-- Query a local vector store (SQLite + sqlite-vec) for the top-k most similar past interactions.
-- Apply a similarity threshold to drop low-relevance memories.
-- Concatenate the surviving memories into a compact prompt segment that precedes the user query.
+- Persist every user+assistant turn in `raw_turns` with embeddings, entities (raw + canonical), and an optional observation fingerprint.
+- Maintain `consolidated_memories` (“cards”) keyed by entities; each card holds a concise summary, embeddings, canonical entities, and the last observation fingerprint.
+- On each new turn: extract entities, compute a fingerprint, find overlapping cards (canonical entity overlap), then merge, discard, or create based on similarity and fingerprints.
+- Retrieval is keyword-first on canonical entities, then low-threshold vector fallback, plus a small recency slice of raw turns.
+- Prompt injection stays small: a few cards (1–4) plus last 3–8 raw turns.
 
-## Architecture sketch
-- **Memory store**: SQLite database with sqlite-vec for similarity search. All data stays local.
-- **Indexer**: writes embeddings + metadata for each interaction.
-- **Retriever**: fast top-k cosine search with optional min similarity.
-- **Orchestrator integration**: injects retrieved memories into the system/user context before sending to Groq.
+## Data model (current)
+- `raw_turns`: id, user_content, assistant_content, combined_text, entities_json, entities_canonical_json, combined_embedding_json, observation_fingerprint, timestamp_ms, conversation_id.
+- `consolidated_memories`: id, title, summary, entities_json, entities_canonical_json, embedding_json, observation_fingerprint, created_ms, updated_ms, source_turn_ids_json.
+- Legacy `turns`/`turn_embeddings` remain for backward compatibility (unused by consolidation).
 
-## Data model (proposed)
-- Table `interactions`:
-  - `id` (INTEGER PRIMARY KEY)
-  - `role` (TEXT) — user|assistant|system
-  - `content` (TEXT)
-  - `timestamp` (INTEGER, ms)
-  - `conversation_id` (TEXT) — to group sessions
-- Table `interaction_embeddings`:
-  - `interaction_id` (INTEGER REFERENCES interactions(id) ON DELETE CASCADE)
-  - `embedding` (VECTOR) — sqlite-vec column
-  - Composite index on `(interaction_id)`
-- Optional: `tags` (TEXT) for lightweight filtering (e.g., domain, language).
+## Entities and canonical IDs
+- Extract entities from natural combined text (`User: …\nAssistant: …`) using spaCy when available, else a nounish fallback.
+- Canonicalize entities (lowercase, normalize slashes, strip leading `./`, collapse whitespace/punct) and store both raw and canonical lists.
+- Matching/duplicate logic uses canonical sets; display uses raw.
 
-## Embeddings
-- Source: call embeddings endpoint via configured provider; default model `models/gemini-embedding-001` (Gemini) for speed/size balance.
-- Shape: 768–1536 dims depending on model; store as `FLOAT32`.
-- Caching: deduplicate identical content hashes to avoid repeated embedding calls.
+## Observation fingerprints (deterministic, no ML)
+- Compute a stable fingerprint for the observation (hash of normalized combined text) and store it on both raw turns and cards.
+- If a new turn shares canonical entities with a card and the fingerprint matches, we update timestamps/source ids and skip summary rewrites (no duplicate card churn).
 
-## Ingestion flow
-1) After each turn, embed only the user query and the agent’s final response (no intermediate/tool text).  
-2) Compute embeddings for each stored item and insert into `interaction_embeddings`.  
-3) Persist interaction metadata alongside each embedding in the same transaction.
+## Ingestion (per completed turn)
+1) Build clean combined text: `User: …\nAssistant: …`.
+2) Embed combined text.
+3) Extract entities → canonicalize → store both.
+4) Compute observation fingerprint (hash of normalized combined text).
+5) Insert into `raw_turns`.
+6) Consolidate:
+   - Find cards with overlapping canonical entities.
+   - Compute cosine between turn embedding and card embedding.
+   - Branches:
+     - Near-duplicate discard: canonical sets identical AND (cosine ≥ duplicate_threshold or fingerprint match) → update timestamp/source list and return (no new summary).
+     - Merge: cosine ≥ merge_threshold → update summary (LLM one-liner, fallback to simple merge), union entities (raw+canonical), update embedding (re-embed summary or blend), update fingerprint, timestamps, and source ids.
+     - New card: create with summary/title, entities (raw+canonical), embedding (re-embed summary or use turn embedding), fingerprint.
 
-## Retrieval flow
-1) Encode the current user query into an embedding.  
-2) Run `SELECT ... ORDER BY cosine_similarity(...) DESC LIMIT k` with `WHERE similarity >= threshold` if provided.  
-3) Blend similarity with recency by adding a time-decay score (e.g., `score = sim * exp(-age_hours / half_life_hours)` or a linear decay cap) before ranking; keep pure similarity as a fallback if timestamps are missing.  
-4) Return the top-k memories with metadata.  
-5) Compact them (strip excess whitespace, optionally summarize long items).  
-6) Inject into the prompt before the latest user message. Example block:
-```
-Relevant memories:
-- [ts 2024-06-01] User asked about deploying with systemd; assistant recommended nspawn.
-- [ts 2024-06-10] User shared API key handling constraints.
-```
-
-## Parameters
-- `k` (default 5, clamp e.g. 1–15).
-- `similarity_threshold` (default 0.2–0.3; disable if None).
-- `max_memory_chars` to cap injected text length (fallback to trimming).
-- `max_token_budget` for the whole prompt (stop adding memories when near limit).
-- Recency tuning: `half_life_hours` (e.g., 24–168) for exponential decay, or a `recency_bonus` for items within a sliding window (e.g., last 24h) applied before final ranking.
+## Retrieval
+1) Extract entities from user query; canonicalize.
+2) Keyword pass: match consolidated cards whose canonical entities overlap; return up to card_k, freshest first.
+3) If none, vector search over card embeddings with low threshold (~0.38–0.45).
+4) Add last N raw turns (recency only) as short-term memory.
+5) Format block for the prompt:
+   - Long-term: card list with titles, timestamps, entities, summaries.
+   - Short-term: recent raw turns with timestamps and entities.
 
 ## Prompt assembly rules
-- Always include system prompt and current user query.
-- Add retrieved memories in chronological order (oldest to newest) after labeling them.
-- If no memory passes threshold, inject a short note: “No relevant past interactions retrieved.”
-- Avoid duplicating recent turns already present in the live context.
+- System prompt explains long-term cards (trust), short-term turns (recency), and behavior when memory is empty.
+- Inject formatted memory block into the user message before the current query.
+- Keep under memory_max_chars (~4–6k tokens total with user input).
 
-## Validation and guardrails
-- Truncate overly long contents before embedding and before injection.
-- Reject storage of empty/whitespace-only content.
-- Ensure embeddings and interactions share a transaction for consistency.
-- Provide feature flag to disable retrieval for debugging.
+## Parameters
+- `card_k` (default 4), `vector_threshold` (~0.38–0.45), `recent_turn_limit` (3–8).
+- Merge/duplicate thresholds: `merge_threshold` (0.75), `duplicate_threshold` (0.92).
+- Embedding strategy: re-embed summary (default) or blend turn/card.
 
-## Tests (proposed)
-- Unit: schema creation/migration, insert + retrieve roundtrip, threshold filtering, k-bounds, dedup hash cache.
-- Integration: orchestrator builds prompts with/without memories; budget guard prevents overflow; empty retrieval path noted.
-- Regression: multilingual inputs retrieve matching multilingual memories (e.g., “hola, ¿cómo estás?” recalls prior Spanish greetings).
+## Guardrails and observability
+- Stop storing trivial queries.
+- Log consolidation decisions (discard/merge/new) with entities/fingerprint and card ids for traceability.
+- Keep `source_turn_ids` to trace back to raw observations.
 
-## Metrics and observability
-- Log retrieval latency, k, threshold, and final injected memory count.
-- Surface embedding call failures and fallback behavior (run without memory).
-- Optional: histogram of similarity scores to tune defaults.
-
-## Rollout plan
-1) Add SQLite/sqlite-vec dependency and migration to create tables.  
-2) Implement embedding client + cache.  
-3) Add ingestion hook after each turn in `code_agent.py`.  
-4) Add retrieval hook before request construction; wire parameters via config.  
-5) Add prompt assembly helper and tests.  
-6) Ship behind a config flag; enable by default after bake-in.  
+## Maintenance/migration
+- New columns are added lazily via schema checks; legacy tables left intact.
+- If legacy data exists, run a backfill through `store_and_consolidate_turn` to seed cards.
+- DB is local SQLite; safe to regenerate if needed.

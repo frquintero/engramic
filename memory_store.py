@@ -151,6 +151,18 @@ def _safe_load_json_list(value: Optional[str]) -> List[str]:
         return []
 
 
+def _canonicalize_entity(value: str) -> str:
+    """
+    Deterministic, no-ML canonicalization for entity matching.
+    """
+    v = value.strip()
+    v = v.replace("\\", "/")
+    v = v.strip(".")
+    v = re.sub(r"\\s+", " ", v)
+    v = re.sub(r"^\\./", "", v)
+    return v.lower()
+
+
 def _l2_normalize(vec: Sequence[float]) -> List[float]:
     norm = math.sqrt(sum(v * v for v in vec))
     if norm <= 0:
@@ -206,6 +218,22 @@ def _default_title(text: str) -> str:
     return title[:60]
 
 
+def _normalize_text_for_fingerprint(text: str) -> str:
+    # Simple whitespace normalization to ensure stable hashing
+    return " ".join((text or "").split()).strip()
+
+
+def _compute_fingerprint(text: str) -> str:
+    return hashlib.sha256(_normalize_text_for_fingerprint(text).encode("utf-8")).hexdigest()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_def: str) -> None:
+    cur = conn.execute(f"PRAGMA table_info({table})")
+    cols = [row[1] for row in cur.fetchall()]
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+
+
 class MemoryStore:
     """
     SQLite-backed memory store for raw turns and consolidated entity-centric memories.
@@ -254,7 +282,9 @@ class MemoryStore:
                 assistant_content TEXT,
                 combined_text TEXT NOT NULL,
                 entities_json TEXT,
+                entities_canonical_json TEXT,
                 combined_embedding_json TEXT NOT NULL,
+                observation_fingerprint TEXT,
                 timestamp_ms INTEGER NOT NULL,
                 conversation_id TEXT
             )
@@ -272,7 +302,9 @@ class MemoryStore:
                 title TEXT,
                 summary TEXT NOT NULL,
                 entities_json TEXT,
+                entities_canonical_json TEXT,
                 embedding_json TEXT NOT NULL,
+                observation_fingerprint TEXT,
                 created_ms INTEGER NOT NULL,
                 updated_ms INTEGER NOT NULL,
                 source_turn_ids_json TEXT
@@ -282,6 +314,11 @@ class MemoryStore:
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_consolidated_updated ON consolidated_memories(updated_ms)"
         )
+        # Add new columns if missing (backward compatibility)
+        _ensure_column(self.conn, "raw_turns", "entities_canonical_json", "TEXT")
+        _ensure_column(self.conn, "raw_turns", "observation_fingerprint", "TEXT")
+        _ensure_column(self.conn, "consolidated_memories", "entities_canonical_json", "TEXT")
+        _ensure_column(self.conn, "consolidated_memories", "observation_fingerprint", "TEXT")
         self.conn.commit()
 
     def add_turn(
@@ -330,6 +367,8 @@ class MemoryStore:
         combined_text: str,
         combined_embedding: Sequence[float],
         entities: List[str],
+        entities_canonical: List[str],
+        observation_fingerprint: Optional[str],
         timestamp_ms: int,
         conversation_id: Optional[str],
     ) -> int:
@@ -341,17 +380,21 @@ class MemoryStore:
                 assistant_content,
                 combined_text,
                 entities_json,
+                entities_canonical_json,
                 combined_embedding_json,
+                observation_fingerprint,
                 timestamp_ms,
                 conversation_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_content,
                 assistant_content or "",
                 combined_text,
                 json.dumps(entities),
+                json.dumps(entities_canonical),
                 json.dumps(list(combined_embedding)),
+                observation_fingerprint,
                 timestamp_ms,
                 conversation_id,
             ),
@@ -363,7 +406,17 @@ class MemoryStore:
     def _load_cards(self) -> List[Dict]:
         rows = self.conn.execute(
             """
-            SELECT id, title, summary, entities_json, embedding_json, created_ms, updated_ms, source_turn_ids_json
+            SELECT
+                id,
+                title,
+                summary,
+                entities_json,
+                entities_canonical_json,
+                embedding_json,
+                observation_fingerprint,
+                created_ms,
+                updated_ms,
+                source_turn_ids_json
             FROM consolidated_memories
             """
         ).fetchall()
@@ -374,7 +427,9 @@ class MemoryStore:
                 title,
                 summary,
                 entities_json,
+                entities_canonical_json,
                 embedding_json,
+                observation_fingerprint,
                 created_ms,
                 updated_ms,
                 source_ids_json,
@@ -385,7 +440,9 @@ class MemoryStore:
                     "title": title or "Memory",
                     "summary": summary or "",
                     "entities": _safe_load_json_list(entities_json),
+                    "entities_canonical": _safe_load_json_list(entities_canonical_json),
                     "embedding": json.loads(embedding_json) if embedding_json else [],
+                    "observation_fingerprint": observation_fingerprint,
                     "created_ms": created_ms,
                     "updated_ms": updated_ms,
                     "source_turn_ids": _safe_load_json_list(source_ids_json),
@@ -400,21 +457,25 @@ class MemoryStore:
         title: Optional[str],
         summary: str,
         entities: List[str],
+        entities_canonical: List[str],
         embedding: Sequence[float],
         updated_ms: int,
         source_turn_ids: List[int],
+        observation_fingerprint: Optional[str],
     ) -> None:
         self.conn.execute(
             """
             UPDATE consolidated_memories
-            SET title = ?, summary = ?, entities_json = ?, embedding_json = ?, updated_ms = ?, source_turn_ids_json = ?
+            SET title = ?, summary = ?, entities_json = ?, entities_canonical_json = ?, embedding_json = ?, observation_fingerprint = ?, updated_ms = ?, source_turn_ids_json = ?
             WHERE id = ?
             """,
             (
                 title,
                 summary,
                 json.dumps(entities),
+                json.dumps(entities_canonical),
                 json.dumps(list(embedding)),
+                observation_fingerprint,
                 updated_ms,
                 json.dumps(source_turn_ids),
                 card_id,
@@ -428,7 +489,9 @@ class MemoryStore:
         title: str,
         summary: str,
         entities: List[str],
+        entities_canonical: List[str],
         embedding: Sequence[float],
+        observation_fingerprint: Optional[str],
         created_ms: int,
         source_turn_ids: List[int],
     ) -> int:
@@ -439,17 +502,21 @@ class MemoryStore:
                 title,
                 summary,
                 entities_json,
+                entities_canonical_json,
                 embedding_json,
+                observation_fingerprint,
                 created_ms,
                 updated_ms,
                 source_turn_ids_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 title,
                 summary,
                 json.dumps(entities),
+                json.dumps(entities_canonical),
                 json.dumps(list(embedding)),
+                observation_fingerprint,
                 created_ms,
                 created_ms,
                 json.dumps(source_turn_ids),
@@ -487,46 +554,91 @@ class MemoryStore:
         # Use natural text for extraction/summarization to avoid polluting entities with XML tags.
         combined_text = f"User: {user_content.strip()}\nAssistant: {(assistant_content or '').strip()}"
         entities = _extract_entities(combined_text)
+        entities_canonical: List[str] = []
+        seen_canon = set()
+        for e in entities:
+            c = _canonicalize_entity(e)
+            if not c or c in seen_canon:
+                continue
+            seen_canon.add(c)
+            entities_canonical.append(c)
+        observation_fingerprint = _compute_fingerprint(combined_text)
         raw_turn_id = self._insert_raw_turn(
             user_content=user_content,
             assistant_content=assistant_content,
             combined_text=combined_text,
             combined_embedding=combined_embedding,
             entities=entities,
+            entities_canonical=entities_canonical,
+            observation_fingerprint=observation_fingerprint,
             timestamp_ms=ts,
             conversation_id=conversation_id,
         )
 
         cards = self._load_cards()
         overlap_cards: List[Dict] = []
-        entity_set = {e.lower() for e in entities}
+        entity_canon_set = set(entities_canonical)
 
         for card in cards:
-            card_entity_set = {e.lower() for e in card["entities"]}
-            if not card_entity_set:
+            card_entity_set = set(
+                card.get("entities_canonical") or [_canonicalize_entity(e) for e in card.get("entities", [])]
+            )
+            if not card_entity_set or not entity_canon_set:
                 continue
-            if entity_set & card_entity_set:
+            if entity_canon_set & card_entity_set:
                 overlap_cards.append(card)
 
         # Identify near-duplicate or merge target
         best_candidate = None
         best_sim = -1.0
-        best_entities_match = None
+        best_entities_match: Optional[List[str]] = None
         for card in overlap_cards:
             card_emb = card.get("embedding") or []
             sim = _cosine_similarity(combined_embedding, card_emb)
             if sim > best_sim:
                 best_sim = sim
                 best_candidate = card
-                best_entities_match = card.get("entities") or []
+                best_entities_match = card.get("entities_canonical") or []
 
-        # Near-duplicate: discard silently
-        if (
-            best_candidate
-            and best_sim >= duplicate_threshold
-            and set(e.lower() for e in best_entities_match or []) == entity_set
-        ):
-            return raw_turn_id
+        # Near-duplicate: discard/skip summary updates if canonical sets identical or fingerprint matches
+        if best_candidate:
+            best_canon_set = set(best_entities_match or [])
+            fingerprint_match = (
+                observation_fingerprint
+                and best_candidate.get("observation_fingerprint")
+                and observation_fingerprint == best_candidate.get("observation_fingerprint")
+            )
+            if fingerprint_match and (entity_canon_set & best_canon_set):
+                source_ids = best_candidate.get("source_turn_ids") or []
+                source_ids.append(raw_turn_id)
+                self._update_card(
+                    best_candidate["id"],
+                    title=best_candidate.get("title") or "Memory",
+                    summary=best_candidate.get("summary") or "",
+                    entities=best_candidate.get("entities") or [],
+                    entities_canonical=list(best_canon_set) if best_canon_set else entities_canonical,
+                    embedding=best_candidate.get("embedding") or [],
+                    updated_ms=ts,
+                    source_turn_ids=source_ids,
+                    observation_fingerprint=best_candidate.get("observation_fingerprint"),
+                )
+                return raw_turn_id
+
+            if best_sim >= duplicate_threshold and best_canon_set == entity_canon_set:
+                source_ids = best_candidate.get("source_turn_ids") or []
+                source_ids.append(raw_turn_id)
+                self._update_card(
+                    best_candidate["id"],
+                    title=best_candidate.get("title") or "Memory",
+                    summary=best_candidate.get("summary") or "",
+                    entities=best_candidate.get("entities") or [],
+                    entities_canonical=list(best_canon_set) if best_canon_set else entities_canonical,
+                    embedding=best_candidate.get("embedding") or [],
+                    updated_ms=ts,
+                    source_turn_ids=source_ids,
+                    observation_fingerprint=best_candidate.get("observation_fingerprint"),
+                )
+                return raw_turn_id
 
         # Merge path
         if best_candidate and best_sim >= merge_threshold:
@@ -538,6 +650,9 @@ class MemoryStore:
             )
             union_entities = list(
                 {e.lower(): e for e in (best_candidate.get("entities") or []) + entities}.values()
+            )
+            union_entities_canonical = list(
+                {c: c for c in (best_candidate.get("entities_canonical") or []) + entities_canonical}.values()
             )
 
             card_embedding: Optional[Sequence[float]] = None
@@ -561,9 +676,11 @@ class MemoryStore:
                 title=best_candidate.get("title") or _default_title(merge_summary),
                 summary=merge_summary,
                 entities=union_entities,
+                entities_canonical=union_entities_canonical,
                 embedding=card_embedding,
                 updated_ms=ts,
                 source_turn_ids=source_ids,
+                observation_fingerprint=observation_fingerprint,
             )
             return raw_turn_id
 
@@ -586,7 +703,9 @@ class MemoryStore:
             title=title,
             summary=summary_text,
             entities=entities,
+            entities_canonical=entities_canonical,
             embedding=card_embedding,
+            observation_fingerprint=observation_fingerprint,
             created_ms=ts,
             source_turn_ids=[raw_turn_id],
         )
@@ -631,17 +750,29 @@ class MemoryStore:
         if not query_embedding:
             return {"cards": [], "recent_raw_turns": []}
 
-        query_entities = _extract_entities(query_text)
+        query_entities_raw = _extract_entities(query_text)
+        query_entities_canonical: List[str] = []
+        seen_q = set()
+        for e in query_entities_raw:
+            c = _canonicalize_entity(e)
+            if not c or c in seen_q:
+                continue
+            seen_q.add(c)
+            query_entities_canonical.append(c)
         cards = self._load_cards()
         final_cards: List[Dict] = []
 
         # Keyword pass
-        if query_entities:
-            query_entity_set = {e.lower() for e in query_entities}
+        if query_entities_canonical:
+            query_entity_set = set(query_entities_canonical)
             keyword_hits = [
                 c
                 for c in cards
-                if query_entity_set & {e.lower() for e in (c.get("entities") or [])}
+                if query_entity_set
+                & set(
+                    c.get("entities_canonical")
+                    or [_canonicalize_entity(e) for e in (c.get("entities") or [])]
+                )
             ]
             keyword_hits.sort(key=lambda c: c.get("updated_ms", 0), reverse=True)
             final_cards = keyword_hits[:card_k]
