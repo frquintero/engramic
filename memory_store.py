@@ -83,6 +83,9 @@ _STOPWORDS = {
     "those",
     "be",
     "are",
+    "user",
+    "assistant",
+    "here",
 }
 
 
@@ -481,7 +484,8 @@ class MemoryStore:
             raise ValueError("Cannot store empty combined embedding")
 
         ts = timestamp_ms if timestamp_ms is not None else _now_ms()
-        combined_text = f"<user_query>{user_content}</user_query>\\n<agent_response>{assistant_content or ''}</agent_response>"
+        # Use natural text for extraction/summarization to avoid polluting entities with XML tags.
+        combined_text = f"User: {user_content.strip()}\nAssistant: {(assistant_content or '').strip()}"
         entities = _extract_entities(combined_text)
         raw_turn_id = self._insert_raw_turn(
             user_content=user_content,
