@@ -2,7 +2,7 @@
     "debug": true,
     "memory": {
         "enabled": true,
-        "db_path": "memory.db",
+        "db_path": "persistent_mem/memory.db",
         "top_k": 5,
         "similarity_threshold": 0.25,
         "half_life_hours": null,
@@ -13,6 +13,14 @@
         "recent_turn_limit": 5,
         "merge_threshold": 0.75,
         "duplicate_threshold": 0.92,
-        "card_embedding_strategy": "reembed_summary"
+        "card_embedding_strategy": "reembed_summary",
+        "beacon_discovery_interval": 100,
+        "beacon_prune_interval": 500,
+        "beacon_prune_max_age_days": 180,
+        "beacon_prune_strength_floor": 0.5,
+        "card_prune_interval": 500,
+        "card_prune_min_access": 1,
+        "card_prune_max_age_days": 180,
+        "card_prune_keep_recent": 10
     }
 }

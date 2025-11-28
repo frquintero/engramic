@@ -4,3 +4,5 @@ yfinance
 requests
 huggingface_hub>=0.24.0
 FlagEmbedding>=1.2.10
+faiss-cpu
+numpy

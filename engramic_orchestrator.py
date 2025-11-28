@@ -1,9 +1,10 @@
 import json
 import os
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import requests
 from dotenv import load_dotenv
@@ -209,6 +210,30 @@ def _merge_card_summary(
     return merged or f"{existing_summary}\n- {new_text[:400]}"
 
 
+def _reconcile_contradiction_summary(
+    client: Groq,
+    model: str,
+    existing_summary: str,
+    new_text: str,
+    debug: bool = False,
+) -> str:
+    system_prompt = (
+        "You are reconciling conflicting facts. Rewrite a single concise summary that preserves truth, "
+        "integrates corrections, and drops superseded statements. No fluff."
+    )
+    user_prompt = f"Existing summary:\n{existing_summary}\n\nNew turn (may contradict):\n{new_text}\n\nReconciled summary:"
+    reconciled = _call_brief_chat_completion(
+        client,
+        model,
+        system_prompt,
+        user_prompt,
+        temperature=0.2,
+        max_tokens=240,
+        debug=debug,
+    )
+    return reconciled or f"{existing_summary}\nUpdated: {new_text[:400]}"
+
+
 def _title_for_card(client: Groq, model: str, combined_text: str, debug: bool = False) -> str:
     system_prompt = "Generate a short 3-6 word title for this memory card. No quotes."
     title = _call_brief_chat_completion(
@@ -221,6 +246,162 @@ def _title_for_card(client: Groq, model: str, combined_text: str, debug: bool = 
         debug=debug,
     )
     return title or "Memory"
+
+
+def _assign_beacons_llm(
+    client: Groq,
+    model: str,
+    summary: str,
+    canonical_entities: Sequence[str],
+    beacon_registry: Dict[str, Dict],
+    current_beacons: Sequence[str],
+    debug: bool = False,
+) -> Dict[str, List[str]]:
+    if not summary or not summary.strip():
+        return {"existing": [], "proposed_new": []}
+
+    registry_items = list(beacon_registry.values())
+    ranked = sorted(registry_items, key=lambda x: (x.get("strength", 0), x.get("card_count", 0)), reverse=True)
+    registry_lines = "\n".join(
+        f"- {item.get('beacon_id')} (strength {item.get('strength', 0):.2f}, cards {item.get('card_count', 0)})"
+        for item in ranked
+    ) or "None"
+
+    entities_text = ", ".join(canonical_entities) if canonical_entities else "None"
+    current_beacons_text = ", ".join(current_beacons) if current_beacons else "None"
+    system_prompt = (
+        "You classify memory summaries into topic beacons.\n"
+        "- Choose existing beacon_ids ONLY from the provided registry list.\n"
+        "- Return exactly one best existing beacon OR one proposed_new beacon (mutually exclusive). Never return more than one total.\n"
+        "- proposed_new is only for novel themes not covered by the registry.\n"
+        "- Respond strictly in JSON using the provided schema. No explanations."
+    )
+    user_prompt = (
+        f"Engram summary:\n{summary.strip()}\n\n"
+        f"Canonical entities: {entities_text}\n\n"
+        f"Existing beacon list on this card (if any): {current_beacons_text}\n\n"
+        f"Beacon registry (id, strength, card_count):\n{registry_lines}\n\n"
+        "Return JSON now."
+    )
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "existing": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 1,
+            },
+            "proposed_new": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 1,
+            },
+        },
+        "required": ["existing", "proposed_new"],
+    }
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.15,
+            max_tokens=220,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "beacon_assignment",
+                    "schema": schema,
+                },
+            },
+        )
+        content = resp.choices[0].message.content if resp and resp.choices else None
+        cleaned = (content or "").strip()
+        if not cleaned:
+            return {"existing": [], "proposed_new": []}
+        data = json.loads(cleaned)
+    except Exception as e:
+        if debug:
+            print(f"Beacon assigner structured call failed or parse error: {e}")
+        return {"existing": [], "proposed_new": []}
+
+    existing_raw = data.get("existing") if isinstance(data, dict) else []
+    proposed_raw = data.get("proposed_new") if isinstance(data, dict) else []
+
+    existing: List[str] = []
+    if isinstance(existing_raw, list):
+        for b in existing_raw:
+            if not isinstance(b, str):
+                continue
+            bid = b.strip()
+            if not bid or bid not in beacon_registry:
+                continue
+            existing.append(bid)
+            break
+
+    if isinstance(proposed_raw, str):
+        proposed_raw = [proposed_raw]
+    proposed: List[str] = []
+    if isinstance(proposed_raw, list) and not existing:
+        for cand in proposed_raw:
+            if not isinstance(cand, str):
+                continue
+            cid = cand.strip()
+            if not cid:
+                continue
+            proposed.append(cid)
+            break
+
+    return {"existing": existing, "proposed_new": proposed}
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+
+    try:
+        data = json.loads(cleaned)
+    except Exception:
+        if debug:
+            print(f"Beacon assigner parse failed: {cleaned}")
+        return {"existing": [], "proposed_new": []}
+
+    existing_raw = data.get("existing") if isinstance(data, dict) else []
+    proposed_raw = data.get("proposed_new") if isinstance(data, dict) else []
+
+    existing: List[str] = []
+    if isinstance(existing_raw, list):
+        for b in existing_raw:
+            if not isinstance(b, str):
+                continue
+            bid = b.strip()
+            if not bid or bid not in beacon_registry:
+                continue
+            if bid in existing:
+                continue
+            existing.append(bid)
+            if len(existing) >= 3:
+                break
+
+    if isinstance(proposed_raw, str):
+        proposed_raw = [proposed_raw]
+    proposed: List[str] = []
+    if isinstance(proposed_raw, list):
+        for cand in proposed_raw:
+            if not isinstance(cand, str):
+                continue
+            cid = cand.strip()
+            if not cid:
+                continue
+            if cid in proposed:
+                continue
+            proposed.append(cid)
+            if len(proposed) >= 1:
+                break
+
+    return {"existing": existing, "proposed_new": proposed}
 
 
 
@@ -243,6 +424,14 @@ def code_agent_orchestrator():
     memory_card_embedding_strategy = memory_cfg.get(
         "card_embedding_strategy", "reembed_summary"
     )
+    beacon_discovery_interval = int(memory_cfg.get("beacon_discovery_interval", 100))
+    beacon_prune_interval = int(memory_cfg.get("beacon_prune_interval", 500))
+    beacon_prune_max_age_days = int(memory_cfg.get("beacon_prune_max_age_days", 180))
+    beacon_prune_strength_floor = float(memory_cfg.get("beacon_prune_strength_floor", 0.5))
+    card_prune_interval = int(memory_cfg.get("card_prune_interval", 500))
+    card_prune_min_access = int(memory_cfg.get("card_prune_min_access", 1))
+    card_prune_max_age_days = int(memory_cfg.get("card_prune_max_age_days", 180))
+    card_prune_keep_recent = int(memory_cfg.get("card_prune_keep_recent", 10))
 
     # Allow a simple selector to pick a known embedding setup
     if embedding_choice:
@@ -277,9 +466,11 @@ def code_agent_orchestrator():
 
     client = Groq(api_key=api_key)
     model = 'openai/gpt-oss-120b'
-    memory_db_path = Path(memory_cfg.get("db_path", "memory.db"))
+    helper_model = 'openai/gpt-oss-20b'
+    memory_db_path = Path(memory_cfg.get("db_path", "persistent_mem/memory.db"))
     memory_store = MemoryStore(memory_db_path) if memory_enabled else None
     conversation_id = str(uuid.uuid4())
+    turn_counter = 0
 
     print("=== Multi-Tool Code-Agent Demo ===")
     print(f"Available tools: {', '.join(tools_descriptions.keys())}")
@@ -565,37 +756,68 @@ def code_agent_orchestrator():
             is_trivial = user_query.strip().lower() in trivial_queries
             
             if not is_trivial:
+                turn_counter += 1
                 combined_embedding = None
                 combined_text = f"User: {user_query}\nAssistant: {final_ai_response or ''}"
                 combined_embedding = _embed_text(client, embedding_model, combined_text, provider=embedding_provider)
 
                 if combined_embedding:
-                    try:
-                        memory_store.store_and_consolidate_turn(
-                            user_content=user_query,
-                            assistant_content=final_ai_response or "",
-                            combined_embedding=combined_embedding,
-                            conversation_id=conversation_id,
-                            duplicate_threshold=memory_duplicate_threshold,
-                            merge_threshold=memory_merge_threshold,
-                            embedding_strategy=memory_card_embedding_strategy,
-                            embedding_fn=lambda text: _embed_text(
-                                client, embedding_model, text, provider=embedding_provider
-                            ),
-                            summary_fn=lambda text: _summarize_card_text(
-                                client, model, text, debug=debug
-                            ),
-                            merge_summary_fn=lambda existing, new: _merge_card_summary(
-                                client, model, existing, new, debug=debug
-                            ),
-                            title_fn=lambda text: _title_for_card(
-                                client, model, text, debug=debug
-                            ),
-                        )
-                    except Exception as e:
-                        if debug: print(f"Failed to store turn: {e}")
+                    memory_store.store_and_consolidate_turn(
+                        user_content=user_query,
+                        assistant_content=final_ai_response or "",
+                        combined_embedding=combined_embedding,
+                        conversation_id=conversation_id,
+                        duplicate_threshold=memory_duplicate_threshold,
+                        merge_threshold=memory_merge_threshold,
+                        embedding_strategy=memory_card_embedding_strategy,
+                        embedding_fn=lambda text: _embed_text(
+                            client, embedding_model, text, provider=embedding_provider
+                        ),
+                        summary_fn=lambda text: _summarize_card_text(
+                            client, helper_model, text, debug=debug
+                        ),
+                        merge_summary_fn=lambda existing, new: _merge_card_summary(
+                            client, helper_model, existing, new, debug=debug
+                        ),
+                        title_fn=lambda text: _title_for_card(
+                            client, helper_model, text, debug=debug
+                        ),
+                        contradiction_fn=lambda existing, new: _reconcile_contradiction_summary(
+                            client, helper_model, existing, new, debug=debug
+                        ),
+                        beacon_assignment_fn=lambda summary, entities_canonical, registry, current_beacons: _assign_beacons_llm(
+                            client,
+                            helper_model,
+                            summary,
+                            entities_canonical,
+                            registry,
+                            current_beacons,
+                            debug=debug,
+                        ),
+                    )
                 else:
                     if debug: print("Embeddings missing; turn not stored.")
+
+                # Periodic beacon maintenance
+                try:
+                    if beacon_discovery_interval > 0 and turn_counter % beacon_discovery_interval == 0:
+                        promoted = memory_store.beacon_discovery_job()
+                        if debug: print(f"Beacon discovery promoted: {promoted}")
+                    if beacon_prune_interval > 0 and turn_counter % beacon_prune_interval == 0:
+                        pruned = memory_store.prune_stale_beacons(
+                            max_age_days=beacon_prune_max_age_days,
+                            strength_floor=beacon_prune_strength_floor,
+                        )
+                        if debug: print(f"Beacon prune removed: {pruned}")
+                    if card_prune_interval > 0 and turn_counter % card_prune_interval == 0:
+                        pruned_cards = memory_store.prune_stale_cards(
+                            min_access_count=card_prune_min_access,
+                            max_age_days=card_prune_max_age_days,
+                            keep_recent_n=card_prune_keep_recent,
+                        )
+                        if debug: print(f"Card prune removed: {pruned_cards}")
+                except Exception as e:
+                    if debug: print(f"Beacon maintenance failed: {e}")
             elif debug:
                 print("Trivial query; not storing in memory.")
 
