@@ -54,7 +54,7 @@ def get_system_info() -> dict:
     workspace = str(ensure_workspace())
     return {
         "os": platform.platform(),
-        "system_local_time": datetime.now().isoformat() + " (not UTC)",
+        "system_local_time": datetime.now().isoformat() + " (UTC-5)",
         "workspace": workspace,
     }
 
@@ -333,6 +333,7 @@ def get_weather(location: str, days: int = 1) -> str:
                 "latitude": lat,
                 "longitude": lng,
                 "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,weathercode",
+                "current": "temperature_2m,weathercode",
                 "forecast_days": days_clamped,
                 "timezone": "auto",
             },
@@ -341,6 +342,8 @@ def get_weather(location: str, days: int = 1) -> str:
         )
         weather_resp.raise_for_status()
         weather_data = weather_resp.json()
+
+        current = weather_data.get("current", {}) or {}
 
         daily = weather_data.get("daily", {})
         if not daily.get("time"):
@@ -389,6 +392,10 @@ def get_weather(location: str, days: int = 1) -> str:
                 "resolved_location": resolved_name or location,
                 "latitude": lat,
                 "longitude": lng,
+                "current_temp_c": current.get("temperature_2m"),
+                "current_condition": weather_codes.get(current.get("weathercode"), "unknown")
+                if current.get("weathercode") is not None
+                else None,
                 "days": days_list,
             },
         )

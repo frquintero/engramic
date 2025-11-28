@@ -7,7 +7,7 @@
         "similarity_threshold": 0.25,
         "half_life_hours": null,
         "max_memory_chars": 4000,
-        "embedding_choice": "gemini",
+        "embedding_choice": "bge",
         "card_k": 4,
         "vector_threshold": 0.38,
         "recent_turn_limit": 5,
