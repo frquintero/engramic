@@ -460,13 +460,21 @@ def code_agent_orchestrator():
     print(f"System Info: {system_info}")
 
     api_key = os.environ.get('GROQ_API_KEY')
+    base_url_env = os.environ.get('GROQ_BASE_URL')
+    base_url = None
+    if base_url_env:
+        # Prevent double /openai/v1/ in requests; Groq client appends the path internally
+        cleaned = base_url_env.rstrip("/")
+        if cleaned.endswith("/openai/v1"):
+            cleaned = cleaned[: -len("/openai/v1")]
+        base_url = cleaned or None
     if not api_key:
         print("Error: GROQ_API_KEY not found in environment variables.")
         return
 
-    client = Groq(api_key=api_key)
-    model = 'openai/gpt-oss-120b'
-    helper_model = 'openai/gpt-oss-20b'
+    client = Groq(api_key=api_key, base_url=base_url)
+    model = os.environ.get("GROQ_MODEL") or 'openai/gpt-oss-120b'
+    helper_model = os.environ.get("GROQ_HELPER_MODEL") or 'openai/gpt-oss-20b'
     memory_db_path = Path(memory_cfg.get("db_path", "persistent_mem/memory.db"))
     memory_store = MemoryStore(memory_db_path) if memory_enabled else None
     conversation_id = str(uuid.uuid4())
