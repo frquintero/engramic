@@ -11,7 +11,7 @@
         "card_k": 4,
         "vector_threshold": 0.38,
         "recent_turn_limit": 5,
-        "merge_threshold": 0.75,
+        "merge_threshold": 0.68,
         "duplicate_threshold": 0.92,
         "card_embedding_strategy": "reembed_summary",
         "beacon_discovery_interval": 100,

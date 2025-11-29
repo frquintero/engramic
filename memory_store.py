@@ -13,7 +13,7 @@ import numpy as np
 
 DEFAULT_DB_PATH = Path("persistent_mem/memory.db")
 DEFAULT_DUPLICATE_THRESHOLD = 0.92
-DEFAULT_MERGE_THRESHOLD = 0.75
+DEFAULT_MERGE_THRESHOLD = 0.68
 DEFAULT_VECTOR_THRESHOLD = 0.38
 DEFAULT_CARD_K = 4
 DEFAULT_RECENT_TURN_LIMIT = 5
@@ -1248,7 +1248,7 @@ class MemoryStore:
                 best_entity_sim = sim
                 best_entity_card = card
 
-        adaptive_threshold = max(0.68, best_entity_sim - 0.05, 0.75)
+        adaptive_threshold = max(0.68, best_entity_sim - 0.05, merge_threshold)
 
         ann_candidates: List[Dict] = []
         if self.ann_index and len(combined_embedding) == self.ann_index.dim:
@@ -1370,10 +1370,7 @@ class MemoryStore:
 
         merge_candidate = None
         merge_sim = -1.0
-        if best_candidate and best_sim >= merge_threshold:
-            merge_candidate = best_candidate
-            merge_sim = best_sim
-        elif best_candidate and best_sim >= adaptive_threshold:
+        if best_candidate and best_sim >= adaptive_threshold:
             merge_candidate = best_candidate
             merge_sim = best_sim
 
