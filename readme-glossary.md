@@ -378,6 +378,19 @@ During Recall, Engrams are chosen partly by **beacon list overlap** with the bea
 
 ---
 
+### 2.6 Beacon Lifecycle
+
+* **Demotion**
+  Beacons that fall below strength 0.5 and have not been touched for 180 days are demoted: their strength is lowered, card_count reset, and they are removed from cards’ beacon lists (logged as `beacon_demote`). Primordial beacons are never demoted.
+* **Immortalization**
+  Beacons with strength >= 0.98 and card_count >= 100 are treated as immortal and are not decayed or demoted.
+* **Code equivalent**
+
+  * `MemoryStore.prune_stale_beacons(...)` in `memory_store.py` handles decay, demotion, and immortalization.
+  * Demotion removes the beacon from card beacon lists and logs an engram_event with before/after beacons; immortals are skipped entirely.
+
+---
+
 #### Agent Final Response
 
 * **Definition**

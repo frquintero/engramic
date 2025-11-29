@@ -996,7 +996,7 @@ class MemoryStore:
         immortal_card_count: int = 100,
     ) -> List[str]:
         cutoff_ms = _now_ms() - max_age_days * 24 * 3600 * 1000
-        to_remove: List[str] = []
+        demoted: List[str] = []
         rows = self.conn.execute(
             "SELECT beacon_id, strength, last_touched_ms, card_count FROM beacon_registry"
         ).fetchall()
@@ -1004,6 +1004,7 @@ class MemoryStore:
             if beacon_id in PRIMORDIAL_BEACONS:
                 continue
             if strength >= immortal_strength and card_count >= immortal_card_count:
+                # Immortalized: preserve strength/card_count; no decay or demotion.
                 continue
             age_days = max(0.0, (_now_ms() - last_touched_ms) / (24 * 3600 * 1000))
             if half_life_days > 0:
@@ -1014,39 +1015,44 @@ class MemoryStore:
                     (strength, last_touched_ms, beacon_id),
                 )
             if strength < strength_floor and last_touched_ms < cutoff_ms:
-                to_remove.append(beacon_id)
-        for beacon_id in to_remove:
-            self.conn.execute("DELETE FROM beacon_registry WHERE beacon_id = ?", (beacon_id,))
-            cards = self._load_cards()
-            for card in cards:
-                blist = card.get("beacon_list") or []
-                if beacon_id not in blist:
-                    continue
-                updated = [b for b in blist if b != beacon_id]
-                self._update_card(
-                    card["id"],
-                    title=card.get("title"),
-                    summary=card.get("summary") or "",
-                    entities=card.get("entities") or [],
-                    structured_entities=card.get("structured_entities") or [],
-                    entities_canonical=card.get("entities_canonical") or [],
-                    embedding=card.get("embedding") or [],
-                    updated_ms=_now_ms(),
-                    source_turn_ids=card.get("source_turn_ids") or [],
-                    observation_fingerprint=card.get("observation_fingerprint"),
-                    access_count=card.get("access_count"),
-                    merge_version=card.get("merge_version"),
-                    beacon_list=updated,
+                # Demote: keep registry entry but strip from cards and lower strength.
+                now = _now_ms()
+                demoted_strength = min(strength, strength_floor * 0.5)
+                self.conn.execute(
+                    "UPDATE beacon_registry SET strength = ?, card_count = ?, last_touched_ms = ? WHERE beacon_id = ?",
+                    (demoted_strength, 0, now, beacon_id),
                 )
-                self._persist_event(
-                    card["id"],
-                    "beacon_prune",
-                    payload={"beacon_id": beacon_id},
-                    before={"beacons": blist},
-                    after={"beacons": updated},
-                )
+                cards = self._load_cards()
+                for card in cards:
+                    blist = card.get("beacon_list") or []
+                    if beacon_id not in blist:
+                        continue
+                    updated = [b for b in blist if b != beacon_id]
+                    self._update_card(
+                        card["id"],
+                        title=card.get("title"),
+                        summary=card.get("summary") or "",
+                        entities=card.get("entities") or [],
+                        structured_entities=card.get("structured_entities") or [],
+                        entities_canonical=card.get("entities_canonical") or [],
+                        embedding=card.get("embedding") or [],
+                        updated_ms=now,
+                        source_turn_ids=card.get("source_turn_ids") or [],
+                        observation_fingerprint=card.get("observation_fingerprint"),
+                        access_count=card.get("access_count"),
+                        merge_version=card.get("merge_version"),
+                        beacon_list=updated,
+                    )
+                    self._persist_event(
+                        card["id"],
+                        "beacon_demote",
+                        payload={"beacon_id": beacon_id},
+                        before={"beacons": blist},
+                        after={"beacons": updated},
+                    )
+                demoted.append(beacon_id)
         self.conn.commit()
-        return to_remove
+        return demoted
 
     def prune_stale_cards(
         self,
