@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -246,6 +247,182 @@ def _title_for_card(client: Groq, model: str, combined_text: str, debug: bool = 
         debug=debug,
     )
     return title or "Memory"
+
+
+def _canonicalize_entities_llm(
+    client: Groq,
+    model: str,
+    spans: Sequence[str],
+    *,
+    user_query: str,
+    agent_response: str,
+    engram_summary: str,
+    debug: bool = False,
+) -> Dict:
+    taxonomy = [
+        "org",
+        "person",
+        "location",
+        "product",
+        "tech",
+        "domain",
+        "concept",
+        "event",
+        "document",
+        "relation",
+        "action",
+        "self_identity",
+        "self_location",
+        "self_work",
+        "self_health",
+        "self_relationships",
+        "self_preferences",
+        "self_projects",
+    ]
+
+    def _fallback(items: Sequence[str], reason: str) -> Dict:
+        if debug:
+            print(f"Canonicalization helper fallback ({reason}); using legacy spans.")
+        results: List[Dict] = []
+        for raw in items:
+            if not isinstance(raw, str):
+                continue
+            cleaned = raw.strip()
+            if not cleaned:
+                continue
+            canonical = cleaned.replace("\\", "/").strip(".").strip()
+            canonical = re.sub(r"\s+", " ", canonical)
+            canonical = re.sub(r"^\\./", "", canonical)
+            canonical = canonical.lower()
+            results.append(
+                {
+                    "span": cleaned,
+                    "type": "concept",
+                    "canonical_name": canonical,
+                    "confidence": None,
+                }
+            )
+        return {"entities": results, "meta": {"fallback_reason": reason, "success": False, "latency_ms": 0}}
+
+    span_list = [s.strip() for s in spans if isinstance(s, str) and s.strip()]
+    span_list = span_list[:7]
+    if not span_list:
+        return {"entities": [], "meta": {"fallback_reason": "no_spans", "success": False, "latency_ms": 0}}
+
+    system_prompt = (
+        "You are an entity canonicalization system. Given spans plus conversation context, "
+        "assign a type from the taxonomy and a disambiguated canonical_name for each span. "
+        "Use self_* types for first-person signals (identity, location, work, health, relationships, preferences, projects). "
+        "Return only JSON; no explanations."
+    )
+    user_prompt = (
+        "Taxonomy:\n"
+        "- org: organizations, companies, institutions\n"
+        "- person: individuals, roles, personas\n"
+        "- location: physical and digital locations\n"
+        "- product: goods, services, offerings\n"
+        "- tech: technologies, tools, systems\n"
+        "- domain: business domains, industries\n"
+        "- concept: abstract ideas, theories\n"
+        "- event: occurrences, meetings\n"
+        "- document: files, reports, sources\n"
+        "- relation: partnerships, hierarchies\n"
+        "- action: commands, operations\n"
+        "- self_identity: first-person identity/name cues\n"
+        "- self_location: first-person location/residence cues\n"
+        "- self_work: first-person work/job/project cues\n"
+        "- self_health: first-person health/medical cues\n"
+        "- self_relationships: first-person family/friend/relationship cues\n"
+        "- self_preferences: first-person likes/preferences\n"
+        "- self_projects: first-person project ownership cues\n\n"
+        f"Context:\nUser: {user_query}\nAgent: {agent_response}\nSummary: {engram_summary}\n\n"
+        f"Spans to canonicalize: {span_list}\n"
+        "Return an array of objects following the schema."
+    )
+    schema = {
+        "type": "array",
+        "maxItems": 7,
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "span": {"type": "string"},
+                "type": {"type": "string", "enum": taxonomy},
+                "canonical_name": {"type": "string"},
+                "confidence": {"type": "number"},
+            },
+            "required": ["span", "type", "canonical_name"],
+        },
+    }
+
+    start = time.time()
+    meta = {"fallback_reason": None, "success": True, "latency_ms": None}
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            max_tokens=400,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "canonical_entities", "schema": schema},
+            },
+        )
+        content = resp.choices[0].message.content if resp and resp.choices else None
+        raw = (content or "").strip()
+        if not raw:
+            meta.update({"fallback_reason": "empty response", "success": False})
+            return _fallback(span_list, "empty response")
+        data = json.loads(raw)
+    except Exception as e:
+        if debug:
+            print(f"Canonicalization helper failed: {e}")
+        meta.update({"fallback_reason": "helper error", "success": False})
+        return _fallback(span_list, "helper error")
+
+    if not isinstance(data, list):
+        meta.update({"fallback_reason": "non-list response", "success": False})
+        return _fallback(span_list, "non-list response")
+
+    results: List[Dict] = []
+    for item in data[:7]:
+        if not isinstance(item, dict):
+            continue
+        span_val = item.get("span")
+        type_val = item.get("type")
+        canon_val = item.get("canonical_name")
+        conf_val = item.get("confidence")
+        if not isinstance(span_val, str) or not span_val.strip():
+            continue
+        if not isinstance(type_val, str) or type_val not in taxonomy:
+            continue
+        if not isinstance(canon_val, str) or not canon_val.strip():
+            continue
+        cleaned_span = span_val.strip()
+        cleaned_canon = canon_val.strip()
+        confidence = None
+        if isinstance(conf_val, (int, float)):
+            try:
+                confidence = float(conf_val)
+            except Exception:
+                confidence = None
+        results.append(
+            {
+                "span": cleaned_span,
+                "type": type_val,
+                "canonical_name": cleaned_canon,
+                "confidence": confidence,
+            }
+        )
+
+    meta["latency_ms"] = int((time.time() - start) * 1000)
+    if not results:
+        meta.update({"fallback_reason": "validation produced empty set", "success": False})
+        return _fallback(span_list, "validation produced empty set")
+    return {"entities": results, "meta": meta}
 
 
 def _assign_beacons_llm(
@@ -792,6 +969,15 @@ def code_agent_orchestrator():
                         ),
                         contradiction_fn=lambda existing, new: _reconcile_contradiction_summary(
                             client, helper_model, existing, new, debug=debug
+                        ),
+                        canonicalization_fn=lambda spans, user_text, assistant_text, summary_text: _canonicalize_entities_llm(
+                            client,
+                            helper_model,
+                            spans,
+                            user_query=user_text,
+                            agent_response=assistant_text,
+                            engram_summary=summary_text,
+                            debug=debug,
                         ),
                         beacon_assignment_fn=lambda summary, entities_canonical, registry, current_beacons: _assign_beacons_llm(
                             client,

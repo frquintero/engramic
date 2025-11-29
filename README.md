@@ -16,11 +16,11 @@ How it works
 Memory (prototype defaults)
 - Storage/index: SQLite + FAISS inner-product ANN; index fully rebuilds on each card write (acceptable at small scale). Configurable via `config.json` (`memory.*`).
 - Embeddings: default `embedding_choice: "bge"` → BAAI/bge-m3 via FlagEmbedding when available; falls back to Hugging Face Inference (`HUGGINGFACE_API_TOKEN`). Card embeddings re-embed summaries on every merge/new card by default.
-- Merging: adaptive threshold `max(0.68, best_entity_sim - 0.05, 0.75)`; duplicates gated by similarity and entity match; merges log `card_events` and bump access counts.
+- Merging: adaptive threshold `max(0.68, best_entity_sim - 0.05, 0.75)`; duplicates gated by similarity and entity match; merges log `engram_events` and bump access counts.
 - Contradictions: cheap negation + token-overlap trigger; when hit, summaries are reconciled via the LLM and re-embedded.
 - Beacons: primordial registry seeded; cards always anchor `__user_self__` and `__agent_self__` (full seven-beacon anchoring is aspirational). Beacon discovery/prune jobs are available per config.
 - Retrieval: beacon-first (global top-2 + primordial), then keyword, then ANN fallback; access counts increment on hits. Recent raw turns are included.
-- Auditing: `card_events` table logs new cards, merges, contradictions, beacon assignments, and pruning. Splits are not implemented in this prototype.
+- Auditing: `engram_events` table logs new cards, merges, contradictions, beacon assignments, and pruning. Splits are not implemented in this prototype.
 
 Tool catalog (tools.py)
 - `list_files`: `ls -1` in the workspace root.

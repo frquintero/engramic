@@ -111,7 +111,7 @@ On each turn:
     * `raw_turns`,
     * `consolidated_cards`,
     * `beacon_registry`,
-    * `card_events`.
+    * `engram_events`.
   * Public methods:
 
     * `store_and_consolidate_turn(...)`,
@@ -211,6 +211,7 @@ On each turn:
 
     * `raw_turns`,
     * `consolidated_cards`.
+  * Canonicalization helper uses a structured taxonomy (org, person, location, product, tech, domain, concept, event, document, relation, action, plus self_* types) and emits self_* entries for first-person cues; those self_* entries map to self beacons during consolidation.
 
 ---
 
@@ -221,7 +222,7 @@ On each turn:
 
   * examples: `__user_self__`, `__agent_self__`, `topic/geography`, `project/keralty_portal`.
   * They represent “neural assemblies” for themes.
-  Primordial beacons are seeded; each card is always anchored to `__user_self__` and `__agent_self__`. Additional topical beacons come from the LLM helper (one existing registry id or one new label), with a simple heuristic fallback only if the helper is unavailable.
+  Primordial beacons are seeded; each engram is always anchored to `__user_self__` and `__agent_self__`. Self beacons (`__self_identity__`, `__self_location__`, `__self_work__`, `__self_health__`, `__self_relationships__`, `__self_preferences__`, `__self_projects__`) are injected directly from canonicalization helper self_* outputs and forced into the beacon list. Additional topical beacons come from the LLM helper (one existing registry id or one new label); no heuristic fallback path remains.
   Mutability: primordial beacons are never pruned; discovered beacons are mutable (strength/card_count update, can be pruned if weak/stale, and added/removed from cards).
 * **Code equivalent**
 
@@ -229,7 +230,7 @@ On each turn:
 
     * `consolidated_cards.beacon_list_json` (per-Engram),
     * `beacon_registry` (beacon stats: strength, counts).
-  * Assigned via an LLM helper during consolidation: the helper sees the summary, canonical entities, current beacons (on merge), and the entire beacon registry, and returns exactly one beacon—either a single existing one or a single new label (mutually exclusive, never more than one). The new beacon is inserted into the registry immediately and attached to the engram; self-beacons (two special primordials) are added separately.
+  * Assigned via an LLM helper during consolidation: the helper sees the summary, canonical entities, current beacons (on merge), and the entire beacon registry, and returns exactly one beacon—either a single existing one or a single new label (mutually exclusive, never more than one). The new beacon is inserted into the registry immediately and attached to the engram; self beacons from canonicalization are added up front, and primordial anchors are added separately.
 
 ---
 
@@ -288,13 +289,13 @@ During Recall, Engrams are chosen partly by **beacon list overlap** with the bea
 
   * Raw Turns,
   * Engrams,
-  * Beacons, ANN index, card_events.
+  * Beacons, ANN index, engram_events.
     LTM is updated by Consolidation and queried by Recall.
 * **Code equivalent**
 
   * Everything managed by `MemoryStore` and its SQLite DB:
 
-    * `raw_turns`, `consolidated_cards`, `beacon_registry`, `card_events`,
+    * `raw_turns`, `consolidated_cards`, `beacon_registry`, `engram_events`,
     * FAISS index for embeddings.
 
 ---
@@ -359,7 +360,7 @@ During Recall, Engrams are chosen partly by **beacon list overlap** with the bea
     * inserts into `raw_turns`,
     * chooses candidate Engrams (entities + similarity),
     * handles fingerprint/duplicate/merge/new-card logic,
-    * logs events in `card_events`,
+    * logs events in `engram_events`,
     * updates FAISS index and beacons.
 
 ---
@@ -453,7 +454,7 @@ Here is a complete conceptual example using this vocabulary.
         * summary (e.g., “User ran ls and saw the current directory contents”),
         * title (e.g., “Shell: ls in workspace”),
         * canonical entities (e.g. `command/ls`),
-        * beacon list (e.g. `["__user_self__", "__agent_self__"]` seeded; additional beacons only if previously registered and matching entities),
+        * beacon list (e.g. `["__user_self__", "__agent_self__"]` seeded; self beacons are added if canonicalization emits self_* types; topical beacons come from the helper),
         * neuroprint for the summary,
         * `source_turn_ids` list containing this Raw Turn’s ID,
         * `access_count = 1`.

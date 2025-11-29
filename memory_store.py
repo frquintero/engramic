@@ -17,6 +17,7 @@ DEFAULT_MERGE_THRESHOLD = 0.75
 DEFAULT_VECTOR_THRESHOLD = 0.38
 DEFAULT_CARD_K = 4
 DEFAULT_RECENT_TURN_LIMIT = 5
+DEFAULT_CANON_CONFIDENCE_FLOOR = 0.35
 
 PRIMORDIAL_BEACONS = [
     "__user_self__",
@@ -37,6 +38,16 @@ SELF_BEACONS = [
     "__self_preferences__",
     "__self_projects__",
 ]
+
+SELF_BEACON_TYPES = {
+    "self_identity": "__self_identity__",
+    "self_location": "__self_location__",
+    "self_work": "__self_work__",
+    "self_health": "__self_health__",
+    "self_relationships": "__self_relationships__",
+    "self_preferences": "__self_preferences__",
+    "self_projects": "__self_projects__",
+}
 
 
 def _now_ms() -> int:
@@ -204,6 +215,20 @@ def _jaccard(a: set, b: set) -> float:
     return len(a & b) / float(len(a | b))
 
 
+def _self_beacons_from_structured(structured_entities: List[Dict]) -> List[str]:
+    beacons: List[str] = []
+    for item in structured_entities or []:
+        if not isinstance(item, dict):
+            continue
+        tval = item.get("type")
+        if not isinstance(tval, str):
+            continue
+        beacon_id = SELF_BEACON_TYPES.get(tval.strip())
+        if beacon_id and beacon_id not in beacons:
+            beacons.append(beacon_id)
+    return beacons
+
+
 class AnnIndex:
     def __init__(self, dim: int):
         if dim <= 0:
@@ -270,6 +295,7 @@ class MemoryStore:
                 assistant_content TEXT,
                 combined_text TEXT NOT NULL,
                 entities_json TEXT,
+                structured_entities_json TEXT,
                 entities_canonical_json TEXT,
                 combined_embedding_json TEXT NOT NULL,
                 observation_fingerprint TEXT,
@@ -287,6 +313,7 @@ class MemoryStore:
                 title TEXT,
                 summary TEXT NOT NULL,
                 entities_json TEXT,
+                structured_entities_json TEXT,
                 entities_canonical_json TEXT,
                 embedding_json TEXT NOT NULL,
                 observation_fingerprint TEXT,
@@ -317,7 +344,7 @@ class MemoryStore:
 
         self.conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS card_events (
+            CREATE TABLE IF NOT EXISTS engram_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 card_id INTEGER,
                 event_type TEXT NOT NULL,
@@ -329,15 +356,49 @@ class MemoryStore:
             )
             """
         )
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_card_events_card ON card_events(card_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_engram_events_card ON engram_events(card_id)")
         self.conn.commit()
         self._maybe_migrate_from_legacy()
+        self._ensure_new_columns()
+
 
     def _maybe_migrate_from_legacy(self) -> None:
         cur = self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='consolidated_memories'"
         )
         if not cur.fetchall():
+            cur_events = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='card_events'"
+            )
+            if cur_events.fetchall():
+                rows = self.conn.execute("SELECT * FROM card_events").fetchall()
+                for row in rows:
+                    (
+                        _id,
+                        card_id,
+                        event_type,
+                        payload_json,
+                        before_json,
+                        after_json,
+                        source_turn_id,
+                        timestamp_ms,
+                    ) = row
+                    self.conn.execute(
+                        """
+                        INSERT INTO engram_events (card_id, event_type, payload_json, before_json, after_json, source_turn_id, timestamp_ms)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            card_id,
+                            event_type,
+                            payload_json,
+                            before_json,
+                            after_json,
+                            source_turn_id,
+                            timestamp_ms,
+                        ),
+                    )
+                self.conn.commit()
             return
         rows = self.conn.execute(
             """
@@ -383,6 +444,50 @@ class MemoryStore:
                 ),
             )
         self.conn.commit()
+        cur_events = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='card_events'"
+        )
+        if cur_events.fetchall():
+            rows_events = self.conn.execute("SELECT * FROM card_events").fetchall()
+            for row_ev in rows_events:
+                (
+                    _id,
+                    card_id,
+                    event_type,
+                    payload_json,
+                    before_json,
+                    after_json,
+                    source_turn_id,
+                    timestamp_ms,
+                ) = row_ev
+                self.conn.execute(
+                    """
+                    INSERT INTO engram_events (card_id, event_type, payload_json, before_json, after_json, source_turn_id, timestamp_ms)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        card_id,
+                        event_type,
+                        payload_json,
+                        before_json,
+                        after_json,
+                        source_turn_id,
+                        timestamp_ms,
+                    ),
+                )
+            self.conn.commit()
+
+    def _ensure_new_columns(self) -> None:
+        def _has_column(table: str, column: str) -> bool:
+            cur = self.conn.execute(f"PRAGMA table_info({table})")
+            cols = [row[1] for row in cur.fetchall()]
+            return column in cols
+
+        if not _has_column("raw_turns", "structured_entities_json"):
+            self.conn.execute("ALTER TABLE raw_turns ADD COLUMN structured_entities_json TEXT")
+        if not _has_column("consolidated_cards", "structured_entities_json"):
+            self.conn.execute("ALTER TABLE consolidated_cards ADD COLUMN structured_entities_json TEXT")
+        self.conn.commit()
 
     def _ensure_primordial_beacons(self) -> None:
         now = _now_ms()
@@ -425,7 +530,7 @@ class MemoryStore:
     ) -> None:
         self.conn.execute(
             """
-            INSERT INTO card_events (card_id, event_type, payload_json, before_json, after_json, source_turn_id, timestamp_ms)
+            INSERT INTO engram_events (card_id, event_type, payload_json, before_json, after_json, source_turn_id, timestamp_ms)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -448,6 +553,7 @@ class MemoryStore:
         combined_text: str,
         combined_embedding: Sequence[float],
         entities: List[str],
+        structured_entities: List[Dict],
         entities_canonical: List[str],
         observation_fingerprint: Optional[str],
         timestamp_ms: int,
@@ -461,18 +567,20 @@ class MemoryStore:
                 assistant_content,
                 combined_text,
                 entities_json,
+                structured_entities_json,
                 entities_canonical_json,
                 combined_embedding_json,
                 observation_fingerprint,
                 timestamp_ms,
                 conversation_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_content,
                 assistant_content or "",
                 combined_text,
                 json.dumps(entities),
+                json.dumps(structured_entities),
                 json.dumps(entities_canonical),
                 json.dumps(list(combined_embedding)),
                 observation_fingerprint,
@@ -492,6 +600,7 @@ class MemoryStore:
                 title,
                 summary,
                 entities_json,
+                structured_entities_json,
                 entities_canonical_json,
                 embedding_json,
                 observation_fingerprint,
@@ -511,6 +620,7 @@ class MemoryStore:
                 title,
                 summary,
                 entities_json,
+                structured_entities_json,
                 entities_canonical_json,
                 embedding_json,
                 observation_fingerprint,
@@ -527,6 +637,7 @@ class MemoryStore:
                     "title": title or "Memory",
                     "summary": summary or "",
                     "entities": _safe_load_json_list(entities_json),
+                    "structured_entities": json.loads(structured_entities_json) if structured_entities_json else [],
                     "entities_canonical": _safe_load_json_list(entities_canonical_json),
                     "embedding": json.loads(embedding_json) if embedding_json else [],
                     "observation_fingerprint": observation_fingerprint,
@@ -547,6 +658,7 @@ class MemoryStore:
         title: Optional[str],
         summary: str,
         entities: List[str],
+        structured_entities: Optional[List[Dict]],
         entities_canonical: List[str],
         embedding: Sequence[float],
         updated_ms: int,
@@ -559,7 +671,7 @@ class MemoryStore:
         self.conn.execute(
             """
             UPDATE consolidated_cards
-            SET title = ?, summary = ?, entities_json = ?, entities_canonical_json = ?, embedding_json = ?,
+            SET title = ?, summary = ?, entities_json = ?, structured_entities_json = ?, entities_canonical_json = ?, embedding_json = ?,
                 observation_fingerprint = ?, updated_ms = ?, source_turn_ids_json = ?, access_count = ?, merge_version = ?, beacon_list_json = ?
             WHERE id = ?
             """,
@@ -567,6 +679,7 @@ class MemoryStore:
                 title,
                 summary,
                 json.dumps(entities),
+                json.dumps(structured_entities or []),
                 json.dumps(entities_canonical),
                 json.dumps(list(embedding)),
                 observation_fingerprint,
@@ -588,6 +701,7 @@ class MemoryStore:
         title: str,
         summary: str,
         entities: List[str],
+        structured_entities: List[Dict],
         entities_canonical: List[str],
         embedding: Sequence[float],
         observation_fingerprint: Optional[str],
@@ -602,6 +716,7 @@ class MemoryStore:
                 title,
                 summary,
                 entities_json,
+                structured_entities_json,
                 entities_canonical_json,
                 embedding_json,
                 observation_fingerprint,
@@ -611,12 +726,13 @@ class MemoryStore:
                 access_count,
                 merge_version,
                 beacon_list_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 title,
                 summary,
                 json.dumps(entities),
+                json.dumps(structured_entities),
                 json.dumps(entities_canonical),
                 json.dumps(list(embedding)),
                 observation_fingerprint,
@@ -637,32 +753,6 @@ class MemoryStore:
                 self.ann_index = AnnIndex(self.embedding_dim)
             self.ann_index.upsert(card_id, embedding)
         return card_id
-
-    def _detect_self_beacons(self, text: str) -> List[str]:
-        lowered = text.lower()
-        hits: List[str] = []
-        if any(tok in lowered for tok in ["i am", "my name", "call me"]):
-            hits.append("__self_identity__")
-        if any(tok in lowered for tok in ["i live", "located in", "from "]):
-            hits.append("__self_location__")
-        if any(tok in lowered for tok in ["i work", "my job", "at work", "career"]):
-            hits.append("__self_work__")
-        if any(tok in lowered for tok in ["health", "doctor", "therapy", "sick", "ill"]):
-            hits.append("__self_health__")
-        if any(tok in lowered for tok in ["partner", "spouse", "relationship", "family"]):
-            hits.append("__self_relationships__")
-        if any(tok in lowered for tok in ["prefer", "like to", "favorite", "love to"]):
-            hits.append("__self_preferences__")
-        if any(tok in lowered for tok in ["project", "building", "working on"]):
-            hits.append("__self_projects__")
-        seen = set()
-        ordered: List[str] = []
-        for b in hits:
-            if b in seen:
-                continue
-            seen.add(b)
-            ordered.append(b)
-        return ordered
 
     def _beacon_registry(self) -> Dict[str, Dict]:
         rows = self.conn.execute(
@@ -716,10 +806,19 @@ class MemoryStore:
             Callable[[str, List[str], Dict[str, Dict], List[str]], Dict[str, List[str]]]
         ] = None,
         current_beacons: Optional[List[str]] = None,
+        forced_beacons: Optional[List[str]] = None,
     ) -> Tuple[List[str], List[str]]:
         registry = self._beacon_registry()
         beacons: List[str] = []
         proposed_new: List[str] = []
+
+        for b in forced_beacons or []:
+            if not isinstance(b, str):
+                continue
+            bid = b.strip()
+            if not bid or bid in beacons:
+                continue
+            beacons.append(bid)
 
         # Primary path: LLM-based assignment; no heuristic fallback if provided.
         if beacon_assignment_fn and summary_text:
@@ -785,13 +884,9 @@ class MemoryStore:
                 proposed_new.append(new_id)
 
         if not beacons and not proposed_new:
-            # Heuristic fallback: registry matches + self-beacons
             for e in entities_canonical:
                 if e in registry and e not in beacons:
                     beacons.append(e)
-            for b in self._detect_self_beacons(combined_text):
-                if b not in beacons:
-                    beacons.append(b)
 
         # Always anchor with primordial context
         for p in PRIMORDIAL_BEACONS[:2]:
@@ -871,6 +966,7 @@ class MemoryStore:
                         title=card.get("title"),
                         summary=card.get("summary") or "",
                         entities=card.get("entities") or [],
+                        structured_entities=card.get("structured_entities") or [],
                         entities_canonical=card.get("entities_canonical") or [],
                         embedding=card.get("embedding") or [],
                         updated_ms=card.get("updated_ms") or now,
@@ -932,6 +1028,7 @@ class MemoryStore:
                     title=card.get("title"),
                     summary=card.get("summary") or "",
                     entities=card.get("entities") or [],
+                    structured_entities=card.get("structured_entities") or [],
                     entities_canonical=card.get("entities_canonical") or [],
                     embedding=card.get("embedding") or [],
                     updated_ms=_now_ms(),
@@ -1009,6 +1106,9 @@ class MemoryStore:
         beacon_assignment_fn: Optional[
             Callable[[str, List[str], Dict[str, Dict], List[str]], Dict[str, List[str]]]
         ] = None,
+        canonicalization_fn: Optional[
+            Callable[[List[str], str, str, str], object]
+        ] = None,
     ) -> int:
         if not user_content.strip():
             raise ValueError("Cannot store empty user content")
@@ -1019,12 +1119,105 @@ class MemoryStore:
         entities = _extract_entities(combined_text)
         entities_canonical: List[str] = []
         seen_canon = set()
-        for e in entities:
-            c = _canonicalize_entity(e)
-            if not c or c in seen_canon:
-                continue
-            seen_canon.add(c)
-            entities_canonical.append(c)
+        structured_entities: List[Dict] = []
+        canon_meta: Dict = {}
+        if canonicalization_fn:
+            try:
+                result = canonicalization_fn(
+                    list(entities[:7]),
+                    user_content,
+                    assistant_content or "",
+                    combined_text,
+                )
+                if isinstance(result, dict) and "entities" in result:
+                    structured_entities = result.get("entities") or []
+                    canon_meta = result.get("meta") or {}
+                elif isinstance(result, list):
+                    structured_entities = result
+                    canon_meta = {"fallback_reason": "no_meta"}
+                else:
+                    structured_entities = []
+                    canon_meta = {"fallback_reason": "invalid_result"}
+            except Exception:
+                structured_entities = []
+                canon_meta = {"fallback_reason": "helper_exception"}
+        else:
+            canon_meta = {"fallback_reason": "no_helper"}
+
+        self_beacons = _self_beacons_from_structured(structured_entities)
+
+        allowed_types = {
+            "org",
+            "person",
+            "location",
+            "product",
+            "tech",
+            "domain",
+            "concept",
+            "event",
+            "document",
+            "relation",
+            "action",
+            "self_identity",
+            "self_location",
+            "self_work",
+            "self_health",
+            "self_relationships",
+            "self_preferences",
+            "self_projects",
+        }
+        confidence_values: List[float] = []
+        if structured_entities:
+            for item in structured_entities:
+                if not isinstance(item, dict):
+                    continue
+                type_val = item.get("type")
+                if type_val and type_val not in allowed_types:
+                    continue
+                canon_val = item.get("canonical_name")
+                if not isinstance(canon_val, str):
+                    continue
+                conf_val = item.get("confidence")
+                if isinstance(conf_val, (int, float)):
+                    try:
+                        conf_float = float(conf_val)
+                        confidence_values.append(conf_float)
+                        if conf_float < DEFAULT_CANON_CONFIDENCE_FLOOR:
+                            continue
+                    except Exception:
+                        pass
+                norm = _canonicalize_entity(canon_val)
+                if not norm or norm in seen_canon:
+                    continue
+                seen_canon.add(norm)
+                entities_canonical.append(norm)
+        else:
+            for e in entities:
+                c = _canonicalize_entity(e)
+                if not c or c in seen_canon:
+                    continue
+                seen_canon.add(c)
+                entities_canonical.append(c)
+        meta_success = canon_meta.get("success") if isinstance(canon_meta, dict) else None
+        canon_event_payload = {
+            "success": bool(meta_success) if meta_success is not None else bool(structured_entities),
+            "fallback_reason": canon_meta.get("fallback_reason") if isinstance(canon_meta, dict) else None,
+            "latency_ms": canon_meta.get("latency_ms") if isinstance(canon_meta, dict) else None,
+            "entities_in": len(entities[:7]),
+            "entities_out": len(entities_canonical),
+        }
+        if confidence_values:
+            canon_event_payload["confidence_min"] = min(confidence_values)
+            canon_event_payload["confidence_max"] = max(confidence_values)
+            canon_event_payload["confidence_avg"] = sum(confidence_values) / float(len(confidence_values))
+        self._persist_event(
+            card_id=None,
+            event_type="canonicalization",
+            payload=canon_event_payload,
+            before=None,
+            after=None,
+            source_turn_id=None,
+        )
         observation_fingerprint = _compute_fingerprint(combined_text)
         raw_turn_id = self._insert_raw_turn(
             user_content=user_content,
@@ -1032,6 +1225,7 @@ class MemoryStore:
             combined_text=combined_text,
             combined_embedding=combined_embedding,
             entities=entities,
+            structured_entities=structured_entities,
             entities_canonical=entities_canonical,
             observation_fingerprint=observation_fingerprint,
             timestamp_ms=ts,
@@ -1084,6 +1278,18 @@ class MemoryStore:
         if fingerprint_match_card:
             source_ids = fingerprint_match_card.get("source_turn_ids") or []
             source_ids.append(raw_turn_id)
+            merged_structured_map = {}
+            for item in (fingerprint_match_card.get("structured_entities") or []) + (structured_entities or []):
+                if not isinstance(item, dict):
+                    continue
+                key = ((item.get("canonical_name") or "").lower(), item.get("type"))
+                if key in merged_structured_map:
+                    continue
+                merged_structured_map[key] = item
+            merged_structured = list(merged_structured_map.values())
+            beacon_list = list(
+                {b: b for b in (fingerprint_match_card.get("beacon_list") or []) + self_beacons}.values()
+            )
             self._persist_event(
                 fingerprint_match_card["id"],
                 "fingerprint_match",
@@ -1097,6 +1303,7 @@ class MemoryStore:
                 title=fingerprint_match_card.get("title") or "Memory",
                 summary=fingerprint_match_card.get("summary") or "",
                 entities=fingerprint_match_card.get("entities") or [],
+                structured_entities=merged_structured,
                 entities_canonical=list(set(fingerprint_match_card.get("entities_canonical") or [])),
                 embedding=fingerprint_match_card.get("embedding") or [],
                 updated_ms=ts,
@@ -1104,8 +1311,9 @@ class MemoryStore:
                 observation_fingerprint=fingerprint_match_card.get("observation_fingerprint"),
                 access_count=(fingerprint_match_card.get("access_count") or 0) + 1,
                 merge_version=(fingerprint_match_card.get("merge_version") or 1),
-                beacon_list=fingerprint_match_card.get("beacon_list") or [],
+                beacon_list=beacon_list,
             )
+            self._update_beacon_counts(beacon_list)
             return raw_turn_id
 
         best_candidate = None
@@ -1121,7 +1329,19 @@ class MemoryStore:
             if best_sim >= duplicate_threshold and best_canon_set == entity_canon_set:
                 source_ids = best_candidate.get("source_turn_ids") or []
                 source_ids.append(raw_turn_id)
+                merged_structured_map = {}
+                for item in (best_candidate.get("structured_entities") or []) + (structured_entities or []):
+                    if not isinstance(item, dict):
+                        continue
+                    key = ((item.get("canonical_name") or "").lower(), item.get("type"))
+                    if key in merged_structured_map:
+                        continue
+                    merged_structured_map[key] = item
+                merged_structured = list(merged_structured_map.values())
                 before = {"summary": best_candidate.get("summary"), "embedding": best_candidate.get("embedding")}
+                beacon_list = list(
+                    {b: b for b in (best_candidate.get("beacon_list") or []) + self_beacons}.values()
+                )
                 self._persist_event(
                     best_candidate["id"],
                     "duplicate",
@@ -1135,6 +1355,7 @@ class MemoryStore:
                     title=best_candidate.get("title") or "Memory",
                     summary=best_candidate.get("summary") or "",
                     entities=best_candidate.get("entities") or [],
+                    structured_entities=merged_structured,
                     entities_canonical=list(best_canon_set),
                     embedding=best_candidate.get("embedding") or [],
                     updated_ms=ts,
@@ -1142,8 +1363,9 @@ class MemoryStore:
                     observation_fingerprint=best_candidate.get("observation_fingerprint"),
                     access_count=(best_candidate.get("access_count") or 0) + 1,
                     merge_version=(best_candidate.get("merge_version") or 1),
-                    beacon_list=best_candidate.get("beacon_list") or [],
+                    beacon_list=beacon_list,
                 )
+                self._update_beacon_counts(beacon_list)
                 return raw_turn_id
 
         merge_candidate = None
@@ -1176,8 +1398,19 @@ class MemoryStore:
                 summary_text=merged_summary,
                 beacon_assignment_fn=beacon_assignment_fn,
                 current_beacons=beacon_list,
+                forced_beacons=self_beacons,
             )
             beacon_list = list({b: b for b in beacon_list + new_beacons}.values())
+
+            merged_structured_map = {}
+            for item in (merge_candidate.get("structured_entities") or []) + (structured_entities or []):
+                if not isinstance(item, dict):
+                    continue
+                key = ((item.get("canonical_name") or "").lower(), item.get("type"))
+                if key in merged_structured_map:
+                    continue
+                merged_structured_map[key] = item
+            merged_structured = list(merged_structured_map.values())
 
             card_embedding: Optional[Sequence[float]] = None
             if contradiction and contradiction_fn and embedding_fn:
@@ -1217,6 +1450,7 @@ class MemoryStore:
                 title=merge_candidate.get("title") or (title_fn(merged_summary) if title_fn else "Memory"),
                 summary=merged_summary,
                 entities=union_entities,
+                structured_entities=merged_structured,
                 entities_canonical=union_entities_canonical,
                 embedding=card_embedding,
                 updated_ms=ts,
@@ -1243,12 +1477,14 @@ class MemoryStore:
             summary_text=summary_text,
             beacon_assignment_fn=beacon_assignment_fn,
             current_beacons=[],
+            forced_beacons=self_beacons,
         )
 
         new_card_id = self._insert_card(
             title=title,
             summary=summary_text,
             entities=entities,
+            structured_entities=structured_entities,
             entities_canonical=entities_canonical,
             embedding=card_embedding,
             observation_fingerprint=observation_fingerprint,
