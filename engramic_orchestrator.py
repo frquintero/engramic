@@ -679,6 +679,15 @@ def code_agent_orchestrator():
                     card_k=memory_card_k,
                     vector_threshold=memory_vector_threshold,
                     recent_turn_limit=memory_recent_turn_limit,
+                    canonicalization_fn=lambda spans, user_text, assistant_text, summary_text: _canonicalize_entities_llm(
+                        client,
+                        helper_model,
+                        spans,
+                        user_query=user_text,
+                        agent_response=assistant_text,
+                        engram_summary=summary_text,
+                        debug=debug,
+                    ),
                 )
                 retrieved_cards = ctx.get("cards") or []
                 recent_raw_turns = ctx.get("recent_raw_turns") or []

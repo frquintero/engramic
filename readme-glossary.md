@@ -300,6 +300,18 @@ During Recall, Engrams are chosen partly by **beacon list overlap** with the bea
 
 ---
 
+#### Experience
+
+* **Definition**
+  The complete paired turn: the **user query** and the **Agent Final Response**. This is the “real” interaction the system remembers and learns from; consolidation always operates on this full pair, not on partials or interim tool chatter.
+* **Code equivalent**
+
+  * In the orchestrator, each turn builds `combined_text = "User: ...\nAssistant: ..."` from the user query and final agent reply.
+  * `store_and_consolidate_turn(...)` receives that combined text + neuroprint and stores a Raw Turn (ground truth), then may merge or create an Engram using that same experience.
+  * No tool-call intermediates or draft assistant messages are part of an Experience; only the user’s message and the final assistant message form the durable record.
+
+---
+
 #### Activation Field
 
 * **Definition**
@@ -335,13 +347,13 @@ During Recall, Engrams are chosen partly by **beacon list overlap** with the bea
   Return a **Memory Context** that the Agent can use.
 * **Code equivalent**
 
-  * `MemoryStore.retrieve_context(...)` in `memory_store.py`:
+* **Narrative**
 
-    * entity extraction + canonicalization,
-    * beacon selection,
-    * Engram selection (beacon-first: global top-2 + primordial, then keyword on canonical entities; ANN similarity only as a fallback),
-    * `_recent_raw_turns(...)` for STM.
-  * `MemoryStore.format_context(cards, recent_raw_turns, ...)` to produce the text block.
+  1) Neuroprint the query, then canonicalize its entities with the LLM helper (same structured canonicalization used in consolidation).  
+  2) Activate beacons for this query: score registry beacons that match those canonical entities, take the top-2 by (strength, card_count), then append primordial anchors `__user_self__`, `__agent_self__`.  
+  3) Pull Engrams whose beacon lists overlap that activated set; rank by access_count and recency; keep `card_k`. If empty, try keyword on canonical entities; if still empty, fall back to ANN similarity on the query neuroprint.  
+  4) Fetch the most recent Raw Turns for STM.  
+  5) Format the Memory Context (Engrams + STM) and place it into Working Memory with system instructions and the current query.
 
 ---
 
@@ -355,13 +367,14 @@ During Recall, Engrams are chosen partly by **beacon list overlap** with the bea
   * merging into / adjusting an existing Engram (summary, beacons, embedding, access_count).
 * **Code equivalent**
 
-  * `MemoryStore.store_and_consolidate_turn(...)`:
+* **Narrative**
 
-    * inserts into `raw_turns`,
-    * chooses candidate Engrams (entities + similarity),
-    * handles fingerprint/duplicate/merge/new-card logic,
-    * logs events in `engram_events`,
-    * updates FAISS index and beacons.
+  1) After the Agent responds, build the combined turn text (User + Assistant) and neuroprint it; store that Raw Turn with its embedding and extracted entities.  
+  2) Canonicalize entities for this turn via the LLM helper (typed spans with `canonical_name`; deterministic fallback if needed).  
+  3) Inject self beacons from any `self_*` canonical entities.  
+  4) Ask the LLM beacon helper to attach **exactly one** existing registry beacon or propose **one** new beacon; if none, optionally use canonical entities that already exist in the registry; always add primordial anchors.  
+  5) Find candidate Engrams by canonical-entity overlap and similarity: fingerprint/duplicate/merge paths update the Engram’s summary, embedding (neuroprint), canonical entities, beacon_list, and source turn ids, bumping access_count.  
+  6) If nothing matches, create a new Engram with title/summary/neuroprint, canonical entities, beacon_list, and source turn ids; seed access_count and update indexes/beacon counts.
 
 ---
 

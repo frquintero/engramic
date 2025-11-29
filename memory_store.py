@@ -1532,18 +1532,13 @@ class MemoryStore:
 
     def _beacons_for_query(self, query_entities_canonical: List[str]) -> List[str]:
         registry = self._beacon_registry()
-        ranked = sorted(registry.values(), key=lambda x: (x["strength"], x["card_count"]), reverse=True)
-        hits = [e for e in query_entities_canonical if e in registry]
-        chosen: List[str] = []
-        if hits:
-            chosen.extend(hits)
-        chosen.extend([b["beacon_id"] for b in ranked[:2] if b["beacon_id"] not in chosen])
+        candidates = [registry[e] for e in query_entities_canonical if e in registry]
+        ranked = sorted(candidates, key=lambda x: (x["strength"], x["card_count"]), reverse=True)
+        chosen: List[str] = [b["beacon_id"] for b in ranked[:2]]
         # Always ensure primordial fallback is present
         for p in PRIMORDIAL_BEACONS[:2]:
             if p not in chosen:
                 chosen.append(p)
-        if not chosen:
-            chosen = PRIMORDIAL_BEACONS[:2]
         return chosen
 
     def retrieve_context(
@@ -1554,18 +1549,89 @@ class MemoryStore:
         card_k: int = DEFAULT_CARD_K,
         vector_threshold: float = DEFAULT_VECTOR_THRESHOLD,
         recent_turn_limit: int = DEFAULT_RECENT_TURN_LIMIT,
+        canonicalization_fn: Optional[
+            Callable[[List[str], str, str, str], object]
+        ] = None,
     ) -> Dict[str, List[Dict]]:
         if not query_embedding:
             return {"cards": [], "recent_raw_turns": []}
+        if canonicalization_fn is None:
+            raise ValueError("canonicalization_fn is required for recall canonicalization")
+
         query_entities_raw = _extract_entities(query_text)
+        structured_entities: List[Dict] = []
+        canon_meta: Dict = {}
+        try:
+            result = canonicalization_fn(
+                list(query_entities_raw[:7]),
+                query_text,
+                "",
+                query_text,
+            )
+            if isinstance(result, dict) and "entities" in result:
+                structured_entities = result.get("entities") or []
+                canon_meta = result.get("meta") or {}
+            elif isinstance(result, list):
+                structured_entities = result
+                canon_meta = {"fallback_reason": "no_meta"}
+            else:
+                structured_entities = []
+                canon_meta = {"fallback_reason": "invalid_result"}
+        except Exception as e:
+            raise RuntimeError(f"Recall canonicalization failed: {e}")
+
         query_entities_canonical: List[str] = []
         seen_q = set()
-        for e in query_entities_raw:
-            c = _canonicalize_entity(e)
-            if not c or c in seen_q:
-                continue
-            seen_q.add(c)
-            query_entities_canonical.append(c)
+        allowed_types = {
+            "org",
+            "person",
+            "location",
+            "product",
+            "tech",
+            "domain",
+            "concept",
+            "event",
+            "document",
+            "relation",
+            "action",
+            "self_identity",
+            "self_location",
+            "self_work",
+            "self_health",
+            "self_relationships",
+            "self_preferences",
+            "self_projects",
+        }
+        if structured_entities:
+            for item in structured_entities:
+                if not isinstance(item, dict):
+                    continue
+                type_val = item.get("type")
+                if type_val and type_val not in allowed_types:
+                    continue
+                canon_val = item.get("canonical_name")
+                if not isinstance(canon_val, str):
+                    continue
+                conf_val = item.get("confidence")
+                if isinstance(conf_val, (int, float)):
+                    try:
+                        conf_float = float(conf_val)
+                        if conf_float < DEFAULT_CANON_CONFIDENCE_FLOOR:
+                            continue
+                    except Exception:
+                        pass
+                norm = _canonicalize_entity(canon_val)
+                if not norm or norm in seen_q:
+                    continue
+                seen_q.add(norm)
+                query_entities_canonical.append(norm)
+        if not query_entities_canonical:
+            for e in query_entities_raw:
+                c = _canonicalize_entity(e)
+                if not c or c in seen_q:
+                    continue
+                seen_q.add(c)
+                query_entities_canonical.append(c)
 
         beacon_ids = self._beacons_for_query(query_entities_canonical)
         cards = self._load_cards()
