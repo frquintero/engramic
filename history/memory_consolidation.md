@@ -16,7 +16,7 @@ Prototype defaults (current implementation)
 
 Critical Fixes and Immediate Upgrades
 - ANN candidate search: replace Pass B full-scan with ANN index (sqlite-vector or FAISS). Keep top-5 under sub-ms at 100k cards; update index on card writes or via short batch jobs; prototype uses full rebuild per write (acceptable while small).
-- Adaptive merge threshold: full_scan_threshold = max(0.68, best_entity_sim - 0.05, 0.75).
+- Adaptive merge threshold: full_scan_threshold = max(0.68, best_entity_sim - 0.05, merge_threshold). Default merge_threshold is now 0.68 so the adaptive path can relax below 0.75; it still raises when entity overlap is higher.
 - Hybrid embedding strategy: target is blend with new_weight 0.4 for normal merges; contradiction or correction paths re-embed reconciled summary. Prototype default re-embeds all merges for simplicity.
 - Cheap contradiction trigger: target is regex negation plus high-cosine-with-negation heuristic; prototype uses the text-only trigger and can add cosine gating later.
 - engram_events mandatory: log merge, contradiction, prune with before/after payloads for audit and rollback; splits stay planned.
