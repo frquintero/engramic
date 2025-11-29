@@ -599,7 +599,7 @@ def code_agent_orchestrator():
     memory_merge_threshold = float(memory_cfg.get("merge_threshold", 0.75))
     memory_duplicate_threshold = float(memory_cfg.get("duplicate_threshold", 0.92))
     memory_card_embedding_strategy = memory_cfg.get(
-        "card_embedding_strategy", "reembed_summary"
+        "card_embedding_strategy", "blend"
     )
     beacon_discovery_interval = int(memory_cfg.get("beacon_discovery_interval", 100))
     beacon_prune_interval = int(memory_cfg.get("beacon_prune_interval", 500))

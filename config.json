@@ -13,7 +13,7 @@
         "recent_turn_limit": 5,
         "merge_threshold": 0.68,
         "duplicate_threshold": 0.92,
-        "card_embedding_strategy": "reembed_summary",
+        "card_embedding_strategy": "blend",
         "beacon_discovery_interval": 100,
         "beacon_prune_interval": 500,
         "beacon_prune_max_age_days": 180,

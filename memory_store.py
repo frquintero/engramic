@@ -1103,7 +1103,7 @@ class MemoryStore:
         timestamp_ms: Optional[int] = None,
         duplicate_threshold: float = DEFAULT_DUPLICATE_THRESHOLD,
         merge_threshold: float = DEFAULT_MERGE_THRESHOLD,
-        embedding_strategy: str = "reembed_summary",
+        embedding_strategy: str = "blend",
         embedding_fn: Optional[Callable[[str], Optional[Sequence[float]]]] = None,
         summary_fn: Optional[Callable[[str], str]] = None,
         merge_summary_fn: Optional[Callable[[str, str], str]] = None,
@@ -1420,8 +1420,12 @@ class MemoryStore:
                 card_embedding = embedding_fn(merged_summary)
             elif embedding_strategy == "reembed_summary" and embedding_fn:
                 card_embedding = embedding_fn(merged_summary)
+            elif embedding_strategy == "blend":
+                card_embedding = _blend_embeddings(
+                    merge_candidate.get("embedding") or [], combined_embedding, new_weight=0.4
+                )
             if card_embedding is None:
-                card_embedding = _blend_embeddings(merge_candidate.get("embedding") or [], combined_embedding, new_weight=0.4)
+                card_embedding = merge_candidate.get("embedding") or []
 
             source_ids = merge_candidate.get("source_turn_ids") or []
             source_ids.append(raw_turn_id)
