@@ -14,7 +14,7 @@
         "merge_threshold": 0.68,
         "duplicate_threshold": 0.92,
         "card_embedding_strategy": "blend",
-        "beacon_discovery_interval": 100,
+        "emergent_beacon_discovery_interval": 20,
         "beacon_prune_interval": 500,
         "beacon_prune_max_age_days": 180,
         "beacon_prune_strength_floor": 0.5,

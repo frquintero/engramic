@@ -601,7 +601,9 @@ def code_agent_orchestrator():
     memory_card_embedding_strategy = memory_cfg.get(
         "card_embedding_strategy", "blend"
     )
-    beacon_discovery_interval = int(memory_cfg.get("beacon_discovery_interval", 100))
+    emergent_beacon_discovery_interval = int(
+        memory_cfg.get("emergent_beacon_discovery_interval", memory_cfg.get("beacon_discovery_interval", 20))
+    )
     beacon_prune_interval = int(memory_cfg.get("beacon_prune_interval", 500))
     beacon_prune_max_age_days = int(memory_cfg.get("beacon_prune_max_age_days", 180))
     beacon_prune_strength_floor = float(memory_cfg.get("beacon_prune_strength_floor", 0.5))
@@ -1003,7 +1005,7 @@ def code_agent_orchestrator():
 
                 # Periodic beacon maintenance
                 try:
-                    if beacon_discovery_interval > 0 and turn_counter % beacon_discovery_interval == 0:
+                    if emergent_beacon_discovery_interval > 0 and turn_counter % emergent_beacon_discovery_interval == 0:
                         promoted = memory_store.beacon_discovery_job()
                         if debug: print(f"Beacon discovery promoted: {promoted}")
                     if beacon_prune_interval > 0 and turn_counter % beacon_prune_interval == 0:
