@@ -1,11 +1,9 @@
 # Canonicalization Upgrade Plan
 
 ## Current Issue
-- Canonical entities are just lowercased spans; no types, disambiguation, or confidence.
-- Merge and duplicate logic depends on these strings, so noisy spans cause false merges and missed merges.
-- Beacon assignment consumes the same noisy spans, making topic anchoring shallow.
-- Failure handling is silent: helper errors or empty outputs degrade behavior without visibility.
-- Storage shape is `List[str]` for `entities_canonical`, so structured data has nowhere to live yet.
+- Structured canonicalization is live: the helper returns typed entities (span, type, canonical_name, optional confidence) with self_* taxonomy support.
+- Canonical names are derived from those structured entities and drive merge/duplicate/beacon logic; the deterministic lowercase spans only appear as a fallback when the helper or schema fails.
+- Raw turns and cards now store `structured_entities_json` alongside the derived `entities_canonical_json`, and engram_events capture helper success/failure for telemetry.
 
 ## Goal
 Establish a reliable canonicalization layer that maps spans to typed, disambiguated canonical names with graceful fallbacks and telemetry, without breaking existing storage and retrieval paths.

@@ -170,7 +170,7 @@ On each turn:
     * `id`,
     * `title`,
     * `summary`,
-    * `entities` / `entities_canonical`,
+    * `entities_json` (raw spans), `structured_entities_json` (typed canonical entities), `entities_canonical_json` (derived canonical_names),
     * `beacon_list_json`,
     * `embedding`,
     * `source_turn_ids_json`,
@@ -182,18 +182,11 @@ On each turn:
 #### Raw Turn
 
 * **Definition**
-  One stored interaction:
-
-  * user text,
-  * agent text,
-  * combined text,
-  * its neuroprint,
-  * entities, timestamps, conversation id, etc.
-    Raw Turns feed STM and are the “ground truth” behind Engrams.
-* **Code equivalent**
-
-  * One row in `raw_turns` table.
-  * Inserted in `store_and_consolidate_turn(...)`.
+  The exact record of a single user ↔ assistant exchange: what the user said, what the assistant replied, and the embedding (neuroprint) of that combined turn.
+* **Role in the system**
+  Raw Turns are the ground truth the system learns from. Consolidation always starts by writing a Raw Turn, and Recall surfaces the most recent Raw Turns as short-term memory so the agent sees the freshest context.
+* **How it’s wired**
+  Stored durably in the raw_turns table with spans, structured canonical entities, and timestamps. Every Engram points back to the Raw Turns that shaped it, and pruning/metrics use these rows as the source of truth.
 
 ---
 
@@ -204,14 +197,10 @@ On each turn:
   It removes superficial differences (case, spelling, phrasing) so the system can say:
 
   * “These all refer to the same thing.”
-* **Code equivalent**
-
-  * Extracted in `MemoryStore` (e.g. `_extract_entities`, `_canonicalize_entity`).
-  * Stored as `entities` and `entities_canonical` in:
-
-    * `raw_turns`,
-    * `consolidated_cards`.
-  * Canonicalization helper uses a structured taxonomy (org, person, location, product, tech, domain, concept, event, document, relation, action, plus self_* types) and emits self_* entries for first-person cues; those self_* entries map to self beacons during consolidation.
+* **Role in the system**
+  Canonical entities give the memory system stable handles for “what this turn is about.” They drive merge/duplicate decisions, beacon activation, and keyword fallback retrieval. Typed variants (person/org/location/tech/etc., including self_* cues) allow the system to tell personal details from topics and map self_* directly to self beacons.
+* **How it’s wired**
+  Each turn’s spans are lifted into structured canonical entities (span, type, canonical_name, confidence). The derived canonical_names list is kept alongside the structured records on both Raw Turns and Engrams. If the structured helper fails, a deterministic lowercase fallback preserves compatibility.
 
 ---
 
@@ -222,15 +211,10 @@ On each turn:
 
   * examples: `__user_self__`, `__agent_self__`, `topic/geography`, `project/keralty_portal`.
   * They represent “neural assemblies” for themes.
-  Primordial beacons are seeded; each engram is always anchored to `__user_self__` and `__agent_self__`. Self beacons (`__self_identity__`, `__self_location__`, `__self_work__`, `__self_health__`, `__self_relationships__`, `__self_preferences__`, `__self_projects__`) are injected directly from canonicalization helper self_* outputs and forced into the beacon list. Additional topical beacons come from the LLM helper (one existing registry id or one new label); no heuristic fallback path remains.
-  Mutability: primordial beacons are never pruned; discovered beacons are mutable (strength/card_count update, can be pruned if weak/stale, and added/removed from cards).
-* **Code equivalent**
-
-  * Strings stored in:
-
-    * `consolidated_cards.beacon_list_json` (per-Engram),
-    * `beacon_registry` (beacon stats: strength, counts).
-  * Assigned via an LLM helper during consolidation: the helper sees the summary, canonical entities, current beacons (on merge), and the entire beacon registry, and returns exactly one beacon—either a single existing one or a single new label (mutually exclusive, never more than one). The new beacon is inserted into the registry immediately and attached to the engram; self beacons from canonicalization are added up front, and primordial anchors are added separately.
+* **Role in the system**
+  Beacons are the routing layer for memory: they decide which Engrams get pulled for a query and where new Engrams live. Primordial anchors (`__user_self__`, `__agent_self__`, etc.) keep the agent and user always represented; self_* beacons come directly from canonicalization when the user talks about themselves; a single topical beacon per turn keeps the system focused instead of drifting across many weak tags.
+* **How it’s wired**
+  Every Engram stores a beacon list. During Recall, the active beacon set (self/primordial + any topical matches) filters Engrams before embeddings kick in. During Consolidation, self_* beacons are injected from canonical entities, primordial anchors are always added, an LLM helper may propose at most one existing beacon or one new label, and if it returns nothing the system falls back to attaching any canonical entities that already exist in the registry. Demotion/decay later trims weak topical beacons while leaving primordial ones untouched.
 
 ---
 
@@ -367,12 +351,12 @@ During Recall, Engrams are chosen partly by **beacon list overlap** with the bea
   * merging into / adjusting an existing Engram (summary, beacons, embedding, access_count).
 * **Code equivalent**
 
-* **Narrative**
+  * **Narrative**
 
   1) After the Agent responds, build the combined turn text (User + Assistant) and neuroprint it; store that Raw Turn with its embedding and extracted entities.  
   2) Canonicalize entities for this turn via the LLM helper (typed spans with `canonical_name`; deterministic fallback if needed).  
   3) Inject self beacons from any `self_*` canonical entities.  
-  4) Ask the LLM beacon helper to attach **exactly one** existing registry beacon or propose **one** new beacon; if none, optionally use canonical entities that already exist in the registry; always add primordial anchors.  
+  4) Ask the LLM beacon helper to attach at most one existing registry beacon or at most one new beacon; if it returns nothing, attach any canonical entities that already exist in the registry; always add primordial anchors.  
   5) Find candidate Engrams by canonical-entity overlap and similarity: fingerprint/duplicate/merge paths update the Engram’s summary, embedding (neuroprint), canonical entities, beacon_list, and source turn ids, bumping access_count.  
   6) If nothing matches, create a new Engram with title/summary/neuroprint, canonical entities, beacon_list, and source turn ids; seed access_count and update indexes/beacon counts.
 
@@ -499,9 +483,9 @@ Here is a complete conceptual example using this vocabulary.
    The Engram Store:
 
    * extracts canonical entities (`command/ls`, etc.),
-   * selects beacons for the query (global top-2 by strength/card_count plus primordial anchors `__user_self__`, `__agent_self__`),
-   * finds the existing **ls Engram** whose beacon list matches,
-   * includes it in the Memory Context,
+   * maps those canonical entities to any matching beacons in the registry, takes the top-2 by (strength, card_count), and ensures primordial anchors `__user_self__`, `__agent_self__` are present as fallback,
+   * pulls cards whose beacon lists overlap that set; if none match, it falls back to keyword overlap on canonical entities, then ANN similarity on the query neuroprint,
+   * includes the existing **ls Engram** in the Memory Context (via beacon overlap in this case),
    * also includes the previous `ls` Raw Turn in STM (if it’s among the last N Raw Turns).
 
 10. **Activation Field (second call)**
