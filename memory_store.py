@@ -286,6 +286,15 @@ class MemoryStore:
         self._ensure_primordial_beacons()
         self._load_ann_index()
 
+    def _validate_embedding(self, embedding: Sequence[float]) -> None:
+        if not embedding:
+            raise ValueError("Embedding vector is empty.")
+        expected = self.embedding_dim or len(embedding)
+        if len(embedding) != expected:
+            raise ValueError(f"Embedding dimension mismatch: expected {expected}, got {len(embedding)}")
+        if self.ann_index and self.ann_index.dim != expected:
+            raise ValueError(f"ANN index dimension mismatch: index dim {self.ann_index.dim}, expected {expected}")
+
     def _init_schema(self) -> None:
         self.conn.execute(
             """
@@ -668,6 +677,9 @@ class MemoryStore:
         merge_version: Optional[int] = None,
         beacon_list: Optional[List[str]] = None,
     ) -> None:
+        self._validate_embedding(embedding)
+        if self.embedding_dim is None:
+            self.embedding_dim = len(embedding)
         self.conn.execute(
             """
             UPDATE consolidated_cards
@@ -709,6 +721,9 @@ class MemoryStore:
         source_turn_ids: List[int],
         beacon_list: List[str],
     ) -> int:
+        self._validate_embedding(embedding)
+        if self.embedding_dim is None:
+            self.embedding_dim = len(embedding)
         cur = self.conn.cursor()
         cur.execute(
             """
@@ -746,8 +761,6 @@ class MemoryStore:
         )
         card_id = cur.lastrowid
         self.conn.commit()
-        if self.embedding_dim is None:
-            self.embedding_dim = len(embedding)
         if self.embedding_dim and len(embedding) == self.embedding_dim:
             if self.ann_index is None:
                 self.ann_index = AnnIndex(self.embedding_dim)

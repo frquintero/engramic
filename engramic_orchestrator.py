@@ -15,6 +15,8 @@ from memory_store import MemoryStore
 from tools import get_system_info, available_functions, tools, tools_descriptions, build_response
 from workspace_executor import ensure_workspace
 
+DEFAULT_LLM_TIMEOUT = float(os.environ.get("GROQ_TIMEOUT_SECS", "30"))
+
 # Lazy-loaded BGE model instance
 _bge_m3_model = None
 
@@ -161,6 +163,7 @@ def _call_brief_chat_completion(
             ],
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout=DEFAULT_LLM_TIMEOUT,
         )
         content = resp.choices[0].message.content
         return content.strip() if content else None
@@ -370,6 +373,7 @@ def _canonicalize_entities_llm(
                 "type": "json_schema",
                 "json_schema": {"name": "canonical_entities", "schema": schema},
             },
+            timeout=DEFAULT_LLM_TIMEOUT,
         )
         content = resp.choices[0].message.content if resp and resp.choices else None
         raw = (content or "").strip()
@@ -494,6 +498,7 @@ def _assign_beacons_llm(
                     "schema": schema,
                 },
             },
+            timeout=DEFAULT_LLM_TIMEOUT,
         )
         content = resp.choices[0].message.content if resp and resp.choices else None
         cleaned = (content or "").strip()
@@ -531,52 +536,6 @@ def _assign_beacons_llm(
                 continue
             proposed.append(cid)
             break
-
-    return {"existing": existing, "proposed_new": proposed}
-    cleaned = content.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", cleaned)
-        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
-
-    try:
-        data = json.loads(cleaned)
-    except Exception:
-        if debug:
-            print(f"Beacon assigner parse failed: {cleaned}")
-        return {"existing": [], "proposed_new": []}
-
-    existing_raw = data.get("existing") if isinstance(data, dict) else []
-    proposed_raw = data.get("proposed_new") if isinstance(data, dict) else []
-
-    existing: List[str] = []
-    if isinstance(existing_raw, list):
-        for b in existing_raw:
-            if not isinstance(b, str):
-                continue
-            bid = b.strip()
-            if not bid or bid not in beacon_registry:
-                continue
-            if bid in existing:
-                continue
-            existing.append(bid)
-            if len(existing) >= 3:
-                break
-
-    if isinstance(proposed_raw, str):
-        proposed_raw = [proposed_raw]
-    proposed: List[str] = []
-    if isinstance(proposed_raw, list):
-        for cand in proposed_raw:
-            if not isinstance(cand, str):
-                continue
-            cid = cand.strip()
-            if not cid:
-                continue
-            if cid in proposed:
-                continue
-            proposed.append(cid)
-            if len(proposed) >= 1:
-                break
 
     return {"existing": existing, "proposed_new": proposed}
 
@@ -782,6 +741,7 @@ def code_agent_orchestrator():
             tools=tools,
             tool_choice="auto",
             temperature=0.4,
+            timeout=DEFAULT_LLM_TIMEOUT,
         )
         try:
             raw_response = response.model_dump()
@@ -926,6 +886,7 @@ def code_agent_orchestrator():
                 tools=tools,
                 tool_choice="auto",
                 temperature=0.4,
+                timeout=DEFAULT_LLM_TIMEOUT,
             )
             try:
                 raw_response = response.model_dump()
